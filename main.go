@@ -6,10 +6,12 @@ import (
 	_ "embed"
 	"fmt"
 	"log"
+	"runtime"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
+	"github.com/wailsapp/wails/v3/pkg/services/dock"
 )
 
 // Wails uses Go's `embed` package to embed the frontend files into the binary.
@@ -19,6 +21,9 @@ import (
 
 //go:embed all:frontend/dist
 var assets embed.FS
+
+//go:embed assets/icon.png assets/icon-dark.png
+var trayIcons embed.FS
 
 type AppService struct {
 	App *application.App
@@ -39,8 +44,8 @@ func (a *AppService) OpenSecondWindow() {
 		Name:      name,
 		Width:     1024,
 		Height:    800,
-		MinWidth:  1024,
-		MinHeight: 800,
+		MinWidth:  600,
+		MinHeight: 300,
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 50,
 			TitleBar:                application.MacTitleBarHidden,
@@ -69,6 +74,7 @@ func main() {
 	logService := services.NewLogService()
 	appSettings := services.NewAppSettingsService()
 	mcpService := services.NewMCPService()
+	dockService := dock.New()
 	versionService := NewVersionService()
 
 	go func() {
@@ -95,6 +101,7 @@ func main() {
 			application.NewService(logService),
 			application.NewService(appSettings),
 			application.NewService(mcpService),
+			application.NewService(dockService),
 			application.NewService(versionService),
 		},
 		Assets: application.AssetOptions{
@@ -118,8 +125,8 @@ func main() {
 		Title:     "Code Switch",
 		Width:     1024,
 		Height:    800,
-		MinWidth:  1024,
-		MinHeight: 800,
+		MinWidth:  600,
+		MinHeight: 300,
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 50,
 			Backdrop:                application.MacBackdropTranslucent,
@@ -128,16 +135,53 @@ func main() {
 		BackgroundColour: application.NewRGB(27, 38, 54),
 		URL:              "/",
 	})
+	showMainWindow := func(withFocus bool) {
+		mainWindow.Center()
+		mainWindow.Show()
+		if withFocus && mainWindow.IsVisible() {
+			mainWindow.Focus()
+		}
+		handleDockVisibility(dockService, true)
+	}
+	showMainWindow(false)
 
 	mainWindow.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
 		mainWindow.Hide()
+		handleDockVisibility(dockService, false)
 		e.Cancel()
 	})
 
 	app.Event.OnApplicationEvent(events.Mac.ApplicationShouldHandleReopen, func(event *application.ApplicationEvent) {
-		mainWindow.Show()
-		mainWindow.Focus()
+		showMainWindow(true)
 	})
+
+	app.Event.OnApplicationEvent(events.Mac.ApplicationDidBecomeActive, func(event *application.ApplicationEvent) {
+		if mainWindow.IsVisible() {
+			mainWindow.Focus()
+			return
+		}
+		showMainWindow(true)
+	})
+
+	systray := app.SystemTray.New()
+	// systray.SetLabel("AI Code Studio")
+	systray.SetTooltip("AI Code Studio")
+	if lightIcon := loadTrayIcon("assets/icon.png"); len(lightIcon) > 0 {
+		systray.SetIcon(lightIcon)
+	}
+	if darkIcon := loadTrayIcon("assets/icon-dark.png"); len(darkIcon) > 0 {
+		systray.SetDarkModeIcon(darkIcon)
+	}
+	systray.AttachWindow(mainWindow).WindowOffset(8).WindowDebounce(200 * time.Millisecond)
+
+	trayMenu := application.NewMenu()
+	trayMenu.Add("显示主窗口").OnClick(func(ctx *application.Context) {
+		showMainWindow(true)
+	})
+	trayMenu.Add("退出").OnClick(func(ctx *application.Context) {
+		app.Quit()
+	})
+	systray.SetMenu(trayMenu)
 
 	appservice.SetApp(app)
 
@@ -157,5 +201,25 @@ func main() {
 	// If an error occurred while running the application, log it and exit.
 	if err != nil {
 		log.Fatal(err)
+	}
+}
+
+func loadTrayIcon(path string) []byte {
+	data, err := trayIcons.ReadFile(path)
+	if err != nil {
+		log.Printf("failed to load tray icon %s: %v", path, err)
+		return nil
+	}
+	return data
+}
+
+func handleDockVisibility(service *dock.DockService, show bool) {
+	if runtime.GOOS != "darwin" || service == nil {
+		return
+	}
+	if show {
+		service.ShowAppIcon()
+	} else {
+		service.HideAppIcon()
 	}
 }

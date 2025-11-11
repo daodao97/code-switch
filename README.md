@@ -51,8 +51,9 @@ wails3 task dev
    ```
 
 ## 发布
-脚本 `scripts/publish_release.sh v0.1.0` 将自动打包并上传以下资产：
-- `codeswitch-macos.zip`
+脚本 `scripts/publish_release.sh v0.1.0` 将自动打包并上传以下资产（macOS 会分别构建 arm64 与 amd64）：
+- `codeswitch-macos-arm64.zip`
+- `codeswitch-macos-amd64.zip`
 - `codeswitch-arm64-installer.exe`
 - `codeswitch.exe`
 
