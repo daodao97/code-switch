@@ -633,10 +633,14 @@ html.dark .mac-sidebar-item:hover {
 /* 更新检查按钮样式 */
 .action-btn,
 .primary-btn {
-  padding: 6px 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 16px;
   border-radius: 8px;
   font-size: 0.875rem;
   font-weight: 500;
+  line-height: 1.2;
   border: none;
   cursor: pointer;
   transition: all 0.2s ease;
