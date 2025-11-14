@@ -9,7 +9,7 @@ import { fetchAppSettings, saveAppSettings, type AppSettings } from '../../servi
 const router = useRouter()
 const heatmapEnabled = ref(true)
 const homeTitleVisible = ref(true)
-const autoStartEnabled = ref(false)
+const autoStartEnabled = ref(true)
 const settingsLoading = ref(true)
 const saveBusy = ref(false)
 
@@ -23,12 +23,12 @@ const loadAppSettings = async () => {
     const data = await fetchAppSettings()
     heatmapEnabled.value = data?.show_heatmap ?? true
     homeTitleVisible.value = data?.show_home_title ?? true
-    autoStartEnabled.value = data?.auto_start ?? false
+    autoStartEnabled.value = data?.auto_start ?? true
   } catch (error) {
     console.error('failed to load app settings', error)
     heatmapEnabled.value = true
     homeTitleVisible.value = true
-    autoStartEnabled.value = false
+    autoStartEnabled.value = true
   } finally {
     settingsLoading.value = false
   }
