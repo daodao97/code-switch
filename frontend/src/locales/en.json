@@ -9,6 +9,35 @@
     "shortcut": "Shortcut key"
   },
   "components": {
+    "provider": {
+      "modelWhitelist": {
+        "label": "Supported Models",
+        "tooltip": "Declare which models this provider supports. Supports exact match (claude-sonnet-4) and wildcard (claude-*)",
+        "placeholder": "e.g., claude-*",
+        "add": "Add",
+        "remove": "Remove model",
+        "examples": {
+          "title": "Examples:",
+          "exact": "Exact match",
+          "prefix": "Prefix match all Claude models",
+          "vendor": "Match models with vendor prefix"
+        }
+      },
+      "modelMapping": {
+        "label": "Model Mapping",
+        "tooltip": "Map external model names to provider-specific names. Supports wildcard expansion",
+        "keyPlaceholder": "External model (e.g., claude-*)",
+        "valuePlaceholder": "Internal model (e.g., anthropic/claude-*)",
+        "add": "Add",
+        "remove": "Remove mapping",
+        "examples": {
+          "title": "Examples:",
+          "exact": "Exact mapping",
+          "wildcard": "Wildcard mapping, auto expands claude-sonnet-4 → anthropic/claude-sonnet-4",
+          "prefix": "Prefix mapping"
+        }
+      }
+    },
     "main": {
       "hero": {
         "eyebrow": "Claude & Codex vendor overview",
@@ -77,7 +106,8 @@
           "apiKey": "API key",
           "officialSite": "Official site",
           "icon": "Icon",
-          "enabled": "Enabled"
+          "enabled": "Enabled",
+          "level": "Priority Level"
         },
         "placeholders": {
           "name": "e.g. AICoding.sh",
@@ -85,6 +115,9 @@
           "apiKey": "sk-xxxxx",
           "officialSite": "https://vendor.com",
           "icon": "e.g. aicoding, kimi"
+        },
+        "hints": {
+          "level": "Lower numbers = higher priority. Level 1 providers are tried first, then Level 2, etc."
         },
         "actions": {
           "cancel": "Cancel",
@@ -100,6 +133,18 @@
         "errors": {
           "invalidUrl": "Please enter a valid API URL"
         }
+      },
+      "levelDesc": {
+        "highest": "Highest Priority",
+        "high": "High Priority",
+        "mediumHigh": "Medium-High Priority",
+        "medium": "Medium Priority",
+        "normal": "Normal Priority",
+        "mediumLow": "Medium-Low Priority",
+        "low": "Low Priority",
+        "lower": "Lower Priority",
+        "veryLow": "Very Low Priority",
+        "lowest": "Lowest Priority"
       }
     },
     "logs": {
@@ -175,7 +220,8 @@
         "startup": "Started when logged in",
         "theme": "Theme mode",
         "heatmap": "Show dashboard heatmap",
-        "homeTitle": "Show home title"
+        "homeTitle": "Show home title",
+        "autoStart": "Launch at login"
       },
       "subLabel": {
         "sb_assistant_access": "Accessibility permission is required to operate clipboard contents",

@@ -10,6 +10,35 @@
   },
   "components": {
     "home": {},
+    "provider": {
+      "modelWhitelist": {
+        "label": "模型白名单",
+        "tooltip": "声明该供应商支持的模型。支持精确匹配（claude-sonnet-4）和通配符（claude-*）",
+        "placeholder": "输入模型名称，如 claude-*",
+        "add": "添加",
+        "remove": "删除模型",
+        "examples": {
+          "title": "示例：",
+          "exact": "精确匹配",
+          "prefix": "前缀匹配所有 Claude 模型",
+          "vendor": "匹配带供应商前缀的模型"
+        }
+      },
+      "modelMapping": {
+        "label": "模型映射",
+        "tooltip": "将外部模型名称映射到供应商内部模型名称。支持通配符展开",
+        "keyPlaceholder": "外部模型名（如 claude-*）",
+        "valuePlaceholder": "内部模型名（如 anthropic/claude-*）",
+        "add": "添加",
+        "remove": "删除映射",
+        "examples": {
+          "title": "示例：",
+          "exact": "精确映射",
+          "wildcard": "通配符映射，自动展开 claude-sonnet-4 → anthropic/claude-sonnet-4",
+          "prefix": "前缀映射"
+        }
+      }
+    },
     "main": {
       "hero": {
         "eyebrow": "Claude & Codex 供应商总览",
@@ -78,7 +107,8 @@
           "apiKey": "API 密钥",
           "officialSite": "官网地址",
           "icon": "图标",
-          "enabled": "启用状态"
+          "enabled": "启用状态",
+          "level": "优先级分组"
         },
         "placeholders": {
           "name": "例如：AICoding.sh",
@@ -86,6 +116,9 @@
           "apiKey": "sk-xxxxx",
           "officialSite": "https://vendor.com",
           "icon": "例如：aicoding、kimi"
+        },
+        "hints": {
+          "level": "数字越小优先级越高，Level 1 会被优先尝试，失败后依次尝试 Level 2、Level 3 等"
         },
         "actions": {
           "cancel": "取消",
@@ -101,6 +134,18 @@
         "errors": {
           "invalidUrl": "请输入合法的 API 地址"
         }
+      },
+      "levelDesc": {
+        "highest": "最高优先级",
+        "high": "高优先级",
+        "mediumHigh": "中高优先级",
+        "medium": "中等优先级",
+        "normal": "普通优先级",
+        "mediumLow": "中低优先级",
+        "low": "低优先级",
+        "lower": "较低优先级",
+        "veryLow": "很低优先级",
+        "lowest": "最低优先级"
       }
     },
     "logs": {
@@ -175,6 +220,7 @@
         "theme": "主题模式",
         "heatmap": "显示主界面热力墙",
         "homeTitle": "显示首页标题",
+        "autoStart": "开机自启动",
         "automatic_up": "自动检查更新",
         "next_up": "下次启动自动检查更新"
       },

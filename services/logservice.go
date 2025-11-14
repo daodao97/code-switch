@@ -363,10 +363,11 @@ func (ls *LogService) ProviderDailyStats(platform string) ([]ProviderDailyStat, 
 		}
 		cost := ls.calculateCost(record.GetString("model"), usage)
 		stat.TotalRequests++
-		if httpCode >= 400 {
-			stat.FailedRequests++
-		} else {
+		// 只有 HTTP 200-299 才算成功，其他（包括 0）都算失败
+		if httpCode >= 200 && httpCode < 300 {
 			stat.SuccessfulRequests++
+		} else {
+			stat.FailedRequests++
 		}
 		stat.InputTokens += int64(input)
 		stat.OutputTokens += int64(output)

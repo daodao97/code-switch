@@ -9,6 +9,7 @@ import { fetchAppSettings, saveAppSettings, type AppSettings } from '../../servi
 const router = useRouter()
 const heatmapEnabled = ref(true)
 const homeTitleVisible = ref(true)
+const autoStartEnabled = ref(false)
 const settingsLoading = ref(true)
 const saveBusy = ref(false)
 
@@ -22,10 +23,12 @@ const loadAppSettings = async () => {
     const data = await fetchAppSettings()
     heatmapEnabled.value = data?.show_heatmap ?? true
     homeTitleVisible.value = data?.show_home_title ?? true
+    autoStartEnabled.value = data?.auto_start ?? false
   } catch (error) {
     console.error('failed to load app settings', error)
     heatmapEnabled.value = true
     homeTitleVisible.value = true
+    autoStartEnabled.value = false
   } finally {
     settingsLoading.value = false
   }
@@ -38,6 +41,7 @@ const persistAppSettings = async () => {
     const payload: AppSettings = {
       show_heatmap: heatmapEnabled.value,
       show_home_title: homeTitleVisible.value,
+      auto_start: autoStartEnabled.value,
     }
     await saveAppSettings(payload)
     window.dispatchEvent(new CustomEvent('app-settings-updated'))
@@ -92,6 +96,17 @@ onMounted(() => {
                 type="checkbox"
                 :disabled="settingsLoading || saveBusy"
                 v-model="homeTitleVisible"
+                @change="persistAppSettings"
+              />
+              <span></span>
+            </label>
+          </ListItem>
+          <ListItem :label="$t('components.general.label.autoStart')">
+            <label class="mac-switch">
+              <input
+                type="checkbox"
+                :disabled="settingsLoading || saveBusy"
+                v-model="autoStartEnabled"
                 @change="persistAppSettings"
               />
               <span></span>

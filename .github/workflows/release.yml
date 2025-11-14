@@ -1,0 +1,189 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    name: Build macOS
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        arch: [arm64, amd64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+
+      - name: Install frontend dependencies
+        run: cd frontend && npm install
+
+      - name: Update build assets
+        run: wails3 task common:update:build-assets
+
+      - name: Generate bindings
+        run: wails3 task common:generate:bindings
+
+      - name: Build macOS ${{ matrix.arch }}
+        run: env ARCH=${{ matrix.arch }} wails3 task package
+
+      - name: Find app bundle
+        id: find-app
+        run: |
+          if [ -d "bin/codeswitch.app" ]; then
+            echo "app_path=bin/codeswitch.app" >> $GITHUB_OUTPUT
+          elif [ -d "bin/CodeSwitch.app" ]; then
+            echo "app_path=bin/CodeSwitch.app" >> $GITHUB_OUTPUT
+          else
+            echo "App bundle not found" >&2
+            exit 1
+          fi
+
+      - name: Archive macOS app
+        run: |
+          cd bin
+          ditto -c -k --sequesterRsrc --keepParent "$(basename ${{ steps.find-app.outputs.app_path }})" codeswitch-macos-${{ matrix.arch }}.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: bin/codeswitch-macos-${{ matrix.arch }}.zip
+
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+
+      - name: Install frontend dependencies
+        run: cd frontend && npm install
+
+      - name: Install NSIS
+        run: choco install nsis -y
+
+      - name: Update build assets
+        run: wails3 task common:update:build-assets
+
+      - name: Generate bindings
+        run: wails3 task common:generate:bindings
+
+      - name: Build Windows Binary
+        run: |
+          $env:ARCH = "amd64"
+          wails3 task windows:build
+        env:
+          PRODUCTION: "true"
+
+      - name: Verify Binary
+        run: |
+          if (Test-Path "bin\CodeSwitch.exe") {
+            Write-Host "✓ Binary found: bin\CodeSwitch.exe"
+            Get-Item "bin\CodeSwitch.exe" | Format-List Name,Length,LastWriteTime
+          } else {
+            Write-Host "✗ Binary not found!"
+            Write-Host "Listing bin directory:"
+            Get-ChildItem bin -ErrorAction SilentlyContinue
+            exit 1
+          }
+
+      - name: Create NSIS Installer
+        run: |
+          $env:PATH += ";C:\Program Files (x86)\NSIS"
+          Push-Location build\windows\nsis
+          wails3 generate webview2bootstrapper
+          $binaryPath = (Resolve-Path "..\..\..\bin\CodeSwitch.exe").Path
+          Write-Host "Binary path: $binaryPath"
+          makensis -DARG_WAILS_AMD64_BINARY="$binaryPath" project.nsi
+          Pop-Location
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-amd64
+          path: |
+            bin/CodeSwitch-amd64-installer.exe
+            bin/CodeSwitch.exe
+
+  create-release:
+    name: Create Release
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display structure
+        run: ls -R artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          cp artifacts/macos-arm64/codeswitch-macos-arm64.zip release-assets/
+          cp artifacts/macos-amd64/codeswitch-macos-amd64.zip release-assets/
+          cp artifacts/windows-amd64/CodeSwitch-amd64-installer.exe release-assets/
+          cp artifacts/windows-amd64/CodeSwitch.exe release-assets/
+          ls -lh release-assets/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release-assets/*
+          body: |
+            ## 新增功能
+
+            ### 优先级分组调度
+
+            新增 Level 字段（1-10）用于供应商优先级分组，实现更灵活的降级策略。
+
+            **主要改进**：
+            - 后端：重构调度逻辑为两层循环架构，优先尝试高优先级分组
+            - 前端：添加 Level 下拉选择器和可视化徽章（L1-L10）
+            - 国际化：支持中英文 Level 描述文本
+            - 测试：新增单元测试覆盖分组、排序和序列化逻辑
+
+            **使用场景**：
+            - 成本优化：低成本供应商优先，高成本作为备份
+            - 稳定性保障：高质量供应商优先，社区供应商降级
+            - 地域分组：国内供应商优先，国外供应商备份
+
+            **向后兼容**：未设置 Level 的供应商自动默认为 Level 1。
+
+            ## 安装说明
+
+            - **Windows**：下载 `codeswitch-amd64-installer.exe` 运行安装，或下载 `codeswitch.exe` 直接运行
+            - **macOS (Apple Silicon)**：下载 `codeswitch-macos-arm64.zip`
+            - **macOS (Intel)**：下载 `codeswitch-macos-amd64.zip`
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

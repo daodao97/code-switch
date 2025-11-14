@@ -8,6 +8,12 @@ export type AutomationCard = {
   tint: string
   accent: string
   enabled: boolean
+  // 模型白名单：声明 provider 支持的模型（精确或通配符）
+  supportedModels?: Record<string, boolean>
+  // 模型映射：external model -> internal model
+  modelMapping?: Record<string, string>
+  // 优先级分组：数字越小优先级越高（1-10，默认 1）
+  level?: number
 }
 
 export const automationCardGroups: Record<'claude' | 'codex', AutomationCard[]> = {

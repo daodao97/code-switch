@@ -15,26 +15,40 @@ const (
 type AppSettings struct {
 	ShowHeatmap   bool `json:"show_heatmap"`
 	ShowHomeTitle bool `json:"show_home_title"`
+	AutoStart     bool `json:"auto_start"`
 }
 
 type AppSettingsService struct {
-	path string
-	mu   sync.Mutex
+	path             string
+	mu               sync.Mutex
+	autoStartService *AutoStartService
 }
 
-func NewAppSettingsService() *AppSettingsService {
+func NewAppSettingsService(autoStartService *AutoStartService) *AppSettingsService {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		home = "."
 	}
 	path := filepath.Join(home, appSettingsDir, appSettingsFile)
-	return &AppSettingsService{path: path}
+	return &AppSettingsService{
+		path:             path,
+		autoStartService: autoStartService,
+	}
 }
 
 func (as *AppSettingsService) defaultSettings() AppSettings {
+	// 检查当前开机自启动状态
+	autoStartEnabled := false
+	if as.autoStartService != nil {
+		if enabled, err := as.autoStartService.IsEnabled(); err == nil {
+			autoStartEnabled = enabled
+		}
+	}
+
 	return AppSettings{
 		ShowHeatmap:   true,
 		ShowHomeTitle: true,
+		AutoStart:     autoStartEnabled,
 	}
 }
 
@@ -49,6 +63,20 @@ func (as *AppSettingsService) GetAppSettings() (AppSettings, error) {
 func (as *AppSettingsService) SaveAppSettings(settings AppSettings) (AppSettings, error) {
 	as.mu.Lock()
 	defer as.mu.Unlock()
+
+	// 同步开机自启动状态
+	if as.autoStartService != nil {
+		if settings.AutoStart {
+			if err := as.autoStartService.Enable(); err != nil {
+				return settings, err
+			}
+		} else {
+			if err := as.autoStartService.Disable(); err != nil {
+				return settings, err
+			}
+		}
+	}
+
 	if err := as.saveLocked(settings); err != nil {
 		return settings, err
 	}
