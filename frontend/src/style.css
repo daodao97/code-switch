@@ -630,6 +630,62 @@ html.dark .mac-sidebar-item:hover {
   }
 }
 
+/* 更新检查按钮样式 */
+.action-btn,
+.primary-btn {
+  padding: 6px 16px;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.action-btn {
+  background: var(--mac-surface-strong);
+  color: var(--mac-text);
+  border: 1px solid var(--mac-border);
+}
+
+.action-btn:hover:not(:disabled) {
+  background: var(--mac-surface-hover);
+}
+
+.primary-btn {
+  background: #0ea5e9;
+  color: white;
+}
+
+.primary-btn:hover:not(:disabled) {
+  background: #0284c7;
+}
+
+.action-btn:disabled,
+.primary-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 版本号和信息文本样式 */
+.info-text,
+.version-text {
+  font-size: 0.875rem;
+  color: var(--mac-text-secondary);
+}
+
+.version-text.highlight {
+  color: #10b981;
+  font-weight: 600;
+}
+
+.warning-badge {
+  font-size: 0.75rem;
+  color: #f59e0b;
+  margin-left: 8px;
+}
+
 .global-eyebrow {
   margin: 0 auto 0 0;
   text-transform: uppercase;
@@ -1230,6 +1286,24 @@ html.dark .ghost-icon:hover {
   transform: translateX(-50%) translateY(2px);
 }
 
+/* 刷新按钮旋转动画 */
+.ghost-icon.rotating svg {
+  animation: spin 1s linear infinite;
+}
+
+.ghost-icon:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
 
 .modal-backdrop {
   position: fixed;

@@ -60,7 +60,8 @@
       },
       "tabs": {
         "ariaLabel": "AI 供应商切换",
-        "addCard": "新增供应商卡片"
+        "addCard": "新增供应商卡片",
+        "refresh": "刷新数据"
       },
       "relayToggle": {
         "label": "Claude proxy",

@@ -59,7 +59,8 @@
       },
       "tabs": {
         "ariaLabel": "AI vendor switcher",
-        "addCard": "Add vendor card"
+        "addCard": "Add vendor card",
+        "refresh": "Refresh data"
       },
       "relayToggle": {
         "label": "Claude proxy",
