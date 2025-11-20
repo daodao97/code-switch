@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	appSettingsDir  = ".codex-swtich"
+	appSettingsDir  = ".codex-switch"
 	appSettingsFile = "app.json"
 )
 
