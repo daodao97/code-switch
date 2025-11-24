@@ -113,7 +113,7 @@
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import * as DeepLinkService from '../../bindings/codeswitch/services/deeplinkservice'
-import type { DeepLinkImportRequest } from '../../bindings/codeswitch/services/deeplinkservice'
+import type { DeepLinkImportRequest } from '../types/deeplink'
 
 const { t } = useI18n()
 

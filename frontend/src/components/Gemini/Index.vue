@@ -263,18 +263,15 @@ import {
   DeleteProvider,
   SwitchProvider,
   CreateProviderFromPreset,
-  type GeminiProvider,
-  type GeminiPreset,
-  type GeminiStatus,
 } from '../../../bindings/codeswitch/services/geminiservice'
+import type { GeminiProvider, GeminiPreset, GeminiStatus, GeminiAuthType } from '../../types/gemini'
 
 const { t } = useI18n()
 const router = useRouter()
 
 const geminiIcon = lobeIcons['gemini'] ?? ''
 
-type BindingGeminiStatus = GeminiStatus
-type GeminiAuth = GeminiStatus['authType']
+type GeminiAuth = GeminiAuthType
 
 const loading = ref(false)
 const saving = ref(false)
@@ -282,7 +279,7 @@ const switching = ref(false)
 
 const presets = ref<GeminiPreset[]>([])
 const providers = ref<GeminiProvider[]>([])
-const status = ref<BindingGeminiStatus | null>(null)
+const status = ref<GeminiStatus | null>(null)
 
 const modalState = reactive({
   open: false,

@@ -1,4 +1,4 @@
-// 深度链接导入请求类型（独立于生成的 bindings，避免生成差异）
+// 本地 DeepLink 类型定义，兼容后端返回的可能 null 字段
 
 export interface DeepLinkImportRequest {
   version: string
@@ -8,7 +8,6 @@ export interface DeepLinkImportRequest {
   homepage: string
   endpoint: string
   apiKey: string
-  // 后端可能返回 null，这里放宽为 string | null
   model?: string | null
   notes?: string | null
   haikuModel?: string | null

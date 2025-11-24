@@ -1,4 +1,4 @@
-// Gemini 相关类型定义（独立于生成的 bindings，避免生成差异导致编译失败）
+// 本地 Gemini 类型定义，避免 CI 生成绑定缺失类型导致编译失败
 
 export type GeminiAuthType = 'oauth-personal' | 'gemini-api-key' | 'packycode' | 'generic'
 
