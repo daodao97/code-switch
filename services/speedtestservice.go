@@ -82,7 +82,7 @@ func (s *SpeedTestService) testSingleEndpoint(client *http.Client, rawURL string
 	}
 
 	// 热身请求（忽略结果，用于建立连接）
-	_ = s.makeRequest(client, parsedURL.String())
+	_, _ = s.makeRequest(client, parsedURL.String())
 
 	// 第二次请求：测量延迟
 	start := time.Now()

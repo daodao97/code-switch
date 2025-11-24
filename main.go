@@ -130,47 +130,9 @@ func main() {
 	// 'Assets' configures the asset server with the 'FS' variable pointing to the frontend files.
 	// 'Bind' is a list of Go struct instances. The frontend has access to the methods of these instances.
 	// 'Mac' options tailor the application when running an macOS.
-	// 用于单实例回调的函数引用
-	var onSecondInstance func()
-
-	// 深度链接协议处理
-	var handleDeepLink func(url string)
-
 	app := application.New(application.Options{
 		Name:        "AI Code Studio",
 		Description: "Claude Code and Codex provier manager",
-		SingleInstanceLock: &application.SingleInstanceLock{
-			UniqueId: "com.codeswitch.app",
-			OnSecondInstanceLaunch: func(data application.SecondInstanceData) {
-				log.Printf("[SingleInstance] 检测到第二个实例启动，激活主窗口")
-				// 处理深度链接
-				if len(data.Args) > 1 {
-					for _, arg := range data.Args[1:] {
-						if strings.HasPrefix(arg, "ccswitch://") {
-							log.Printf("[DeepLink] 从第二实例接收深度链接: %s", arg)
-							if handleDeepLink != nil {
-								handleDeepLink(arg)
-							}
-							break
-						}
-					}
-				}
-				if onSecondInstance != nil {
-					onSecondInstance()
-				}
-			},
-		},
-		CustomProtocols: []application.CustomProtocol{
-			{
-				Scheme: "ccswitch",
-				Handler: func(urlStr string) {
-					log.Printf("[DeepLink] 接收深度链接: %s", urlStr)
-					if handleDeepLink != nil {
-						handleDeepLink(urlStr)
-					}
-				},
-			},
-		},
 		Services: []application.Service{
 			application.NewService(appservice),
 			application.NewService(suiService),
@@ -250,21 +212,6 @@ func main() {
 			focusMainWindow()
 		}
 		handleDockVisibility(dockService, true)
-	}
-
-	// 设置单实例回调：当第二个实例启动时，聚焦主窗口
-	onSecondInstance = func() {
-		showMainWindow(true)
-	}
-
-	// 设置深度链接处理：发送事件到前端
-	handleDeepLink = func(urlStr string) {
-		showMainWindow(true)
-		// 发送自定义事件到前端
-		app.Emit(&application.WailsEvent{
-			Name: "deeplink:import",
-			Data: map[string]string{"url": urlStr},
-		})
 	}
 
 	showMainWindow(false)
