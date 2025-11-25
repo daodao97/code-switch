@@ -199,59 +199,6 @@
           </div>
           <button
             class="ghost-icon"
-            :data-tooltip="t('components.main.controls.mcp')"
-            @click="goToMcp"
-          >
-            <span class="icon-svg" v-html="mcpIcon" aria-hidden="true"></span>
-          </button>
-          <button
-            class="ghost-icon"
-            :data-tooltip="t('components.main.controls.skill')"
-            @click="goToSkill"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                d="M6 4h8a4 4 0 014 4v12a3 3 0 00-3-3H6z"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-              <path
-                d="M6 4a2 2 0 00-2 2v13c0 .55.45 1 1 1h11"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-              <path
-                d="M9 8h5"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
-              />
-            </svg>
-          </button>
-          <button
-            class="ghost-icon"
-            :data-tooltip="t('components.main.logs.view')"
-            @click="goToLogs"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                d="M5 7h14M5 12h14M5 17h9"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                fill="none"
-              />
-            </svg>
-          </button>
-          <button
-            class="ghost-icon"
             :data-tooltip="t('components.main.tabs.addCard')"
             @click="openCreateModal"
           >
