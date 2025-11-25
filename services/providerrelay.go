@@ -149,9 +149,9 @@ func (prs *ProviderRelayService) registerRoutes(router gin.IRouter) {
 	router.POST("/v1/messages", prs.proxyHandler("claude", "/v1/messages"))
 	router.POST("/responses", prs.proxyHandler("codex", "/responses"))
 
-	// Gemini API 端点（支持 v1 和 v1beta）
-	router.POST("/v1beta/*any", prs.geminiProxyHandler("/v1beta"))
-	router.POST("/v1/*any", prs.geminiProxyHandler("/v1"))
+	// Gemini API 端点（使用专门的路径前缀避免与 Claude 冲突）
+	router.POST("/gemini/v1beta/*any", prs.geminiProxyHandler("/v1beta"))
+	router.POST("/gemini/v1/*any", prs.geminiProxyHandler("/v1"))
 }
 
 func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.HandlerFunc {

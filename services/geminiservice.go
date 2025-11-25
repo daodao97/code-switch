@@ -705,14 +705,14 @@ func (s *GeminiService) DisableProxy() error {
 	return nil
 }
 
-// buildProxyURL 构建代理 URL
+// buildProxyURL 构建代理 URL（包含 /gemini 前缀）
 func buildProxyURL(relayAddr string) string {
 	addr := strings.TrimSpace(relayAddr)
 	if addr == "" {
 		addr = ":18100"
 	}
 	if strings.HasPrefix(addr, "http://") || strings.HasPrefix(addr, "https://") {
-		return addr
+		return addr + "/gemini"
 	}
 	host := addr
 	if strings.HasPrefix(host, ":") {
@@ -721,7 +721,7 @@ func buildProxyURL(relayAddr string) string {
 	if !strings.Contains(host, "://") {
 		host = "http://" + host
 	}
-	return host
+	return host + "/gemini"
 }
 
 // DuplicateProvider 复制供应商
