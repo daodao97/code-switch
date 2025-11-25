@@ -158,7 +158,7 @@ const navigate = (path: string) => {
     </div>
 
     <div class="sidebar-footer" v-if="!isCollapsed">
-      <span class="version">v0.4.0</span>
+      <span class="version">v1.1.11</span>
     </div>
   </nav>
 </template>
