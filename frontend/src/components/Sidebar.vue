@@ -19,6 +19,7 @@ const navItems: NavItem[] = [
   { path: '/prompts', icon: 'file-text', labelKey: 'sidebar.prompts', isNew: true },
   { path: '/mcp', icon: 'plug', labelKey: 'sidebar.mcp' },
   { path: '/skill', icon: 'tool', labelKey: 'sidebar.skill' },
+  { path: '/gemini', icon: 'sparkles', labelKey: 'sidebar.gemini' },
   { path: '/speedtest', icon: 'zap', labelKey: 'sidebar.speedtest', isNew: true },
   { path: '/env', icon: 'search', labelKey: 'sidebar.env', isNew: true },
   { path: '/logs', icon: 'bar-chart', labelKey: 'sidebar.logs' },
@@ -72,6 +73,13 @@ const navigate = (path: string) => {
         <!-- Tool -->
         <svg v-else-if="item.icon === 'tool'" class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
+        </svg>
+
+        <!-- Sparkles -->
+        <svg v-else-if="item.icon === 'sparkles'" class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3z"></path>
+          <path d="M5 19l.5 1.5L7 21l-1.5.5L5 23l-.5-1.5L3 21l1.5-.5L5 19z"></path>
+          <path d="M19 5l.5 1.5L21 7l-1.5.5L19 9l-.5-1.5L17 7l1.5-.5L19 5z"></path>
         </svg>
 
         <!-- Zap -->
