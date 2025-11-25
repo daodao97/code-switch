@@ -1625,5 +1625,14 @@ button {
   flex-direction: row;
   align-items: center;
   justify-content: center;
+  gap: 8px;
   line-height: 1;
+}
+
+/* 修复按钮内 SVG 被 Tailwind preflight 设置为 display:block 导致的布局问题 */
+button svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  display: inline-block;
 }
