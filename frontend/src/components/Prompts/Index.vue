@@ -563,6 +563,13 @@ html.dark .action-btn:hover {
 .secondary-btn svg {
   width: 16px;
   height: 16px;
+  flex-shrink: 0;
+}
+
+.primary-btn,
+.secondary-btn {
+  justify-content: center;
+  line-height: 1;
 }
 
 /* Modal */

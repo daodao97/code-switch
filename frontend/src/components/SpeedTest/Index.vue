@@ -297,6 +297,12 @@ function getLatencyText(result: EndpointLatency | null): string {
 .add-btn svg {
   width: 16px;
   height: 16px;
+  flex-shrink: 0;
+}
+
+.add-btn {
+  justify-content: center;
+  line-height: 1;
 }
 
 .list-header {
@@ -341,6 +347,12 @@ function getLatencyText(result: EndpointLatency | null): string {
 .test-btn svg {
   width: 16px;
   height: 16px;
+  flex-shrink: 0;
+}
+
+.test-btn {
+  justify-content: center;
+  line-height: 1;
 }
 
 .test-btn.testing svg.spin {
