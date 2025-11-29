@@ -57,6 +57,14 @@ func (ss *SettingsService) GetBlacklistLevelConfig() (*BlacklistLevelConfig, err
 	}
 	// 如果数据库读取失败，保留 JSON 文件中的值（向后兼容）
 
+	// 【关键修复】从数据库读取阈值，覆盖 JSON 文件中的值
+	// 因为 UI 设置的阈值是通过 UpdateBlacklistSettings() 写入数据库的
+	dbThreshold, _, err := ss.GetBlacklistSettings()
+	if err == nil && dbThreshold > 0 {
+		config.FailureThreshold = dbThreshold
+	}
+	// 如果数据库读取失败，保留 JSON 文件中的值（向后兼容）
+
 	return config, nil
 }
 

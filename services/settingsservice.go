@@ -48,7 +48,7 @@ func DefaultBlacklistLevelConfig() *BlacklistLevelConfig {
 	return &BlacklistLevelConfig{
 		EnableLevelBlacklist:       false, // 默认关闭，向后兼容
 		FailureThreshold:           3,
-		DedupeWindowSeconds:        30,
+		DedupeWindowSeconds:        2,
 		NormalDegradeIntervalHours: 1.0,
 		ForgivenessHours:           3.0,
 		JumpPenaltyWindowHours:     2.5,
