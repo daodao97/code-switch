@@ -172,14 +172,19 @@ jobs:
 
             ## 🐛 Bug 修复
 
+            ### Windows 安装版自动更新修复
+            - 修复安装版自动更新报错 "requires elevation" 的问题
+            - 使用 PowerShell 请求 UAC 管理员权限执行安装器
+
+            ### GitHub 链接修复
+            - 首页 GitHub 图标链接指向正确的仓库地址
+
             ### 拉黑阈值修复
             - 修复 UI 设置的失败阈值不生效的问题
-            - 原因：UI 保存到数据库，但等级拉黑从 JSON 读取，数据源不一致
-            - 现在阈值统一从数据库读取，与 UI 设置保持同步
+            - 阈值统一从数据库读取，与 UI 设置保持同步
 
             ### 等级拉黑开关修复
             - 修复等级拉黑开关不生效的问题
-            - 开关状态统一从数据库读取
 
             ### UI 修复
             - 修复提示词管理页面 Tab 文字不居中的问题
@@ -191,7 +196,7 @@ jobs:
             - **macOS (Apple Silicon)**：下载 `codeswitch-macos-arm64.zip`，解压后拖入 Applications 文件夹
             - **macOS (Intel)**：下载 `codeswitch-macos-amd64.zip`，解压后拖入 Applications 文件夹
 
-            **完整更新日志**: https://github.com/Rogers-F/code-switch-R/compare/v1.1.20...v1.1.21
+            **完整更新日志**: https://github.com/Rogers-F/code-switch-R/compare/v1.1.21...v1.1.22
           draft: false
           prerelease: false
         env:

@@ -422,8 +422,10 @@ func (us *UpdateService) applyUpdateWindows(updatePath string) error {
 		return us.applyPortableUpdate(updatePath)
 	}
 
-	// 安装版：启动安装器（静默模式）
-	cmd := exec.Command(updatePath, "/SILENT")
+	// 安装版：启动安装器（静默模式，请求管理员权限）
+	// 使用 PowerShell Start-Process -Verb RunAs 来请求 UAC 提升权限
+	psScript := fmt.Sprintf(`Start-Process -FilePath '%s' -ArgumentList '/SILENT' -Verb RunAs`, updatePath)
+	cmd := exec.Command("powershell", "-Command", psScript)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("启动安装器失败: %w", err)
 	}
