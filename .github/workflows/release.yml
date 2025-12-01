@@ -166,9 +166,6 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install Wails
-        run: go install github.com/wailsapp/wails/v3/cmd/wails3@latest
-
       - name: Install Linux Build Dependencies
         run: |
           sudo apt-get update
@@ -177,6 +174,9 @@ jobs:
             pkg-config \
             libgtk-3-dev \
             libwebkit2gtk-4.1-dev
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@latest
 
       - name: Install frontend dependencies
         run: cd frontend && npm install
