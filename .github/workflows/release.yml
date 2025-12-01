@@ -203,14 +203,14 @@ jobs:
           cd bin
           echo "Files in bin/:"
           ls -la
-          # linuxdeploy creates AppImage with arch suffix, rename to standard name
-          if [ -f "CodeSwitch-x86_64.AppImage" ]; then
-            mv CodeSwitch-x86_64.AppImage CodeSwitch.AppImage
-            echo "Renamed CodeSwitch-x86_64.AppImage -> CodeSwitch.AppImage"
-          elif [ -f "CodeSwitch-aarch64.AppImage" ]; then
-            mv CodeSwitch-aarch64.AppImage CodeSwitch.AppImage
-            echo "Renamed CodeSwitch-aarch64.AppImage -> CodeSwitch.AppImage"
-          fi
+          # linuxdeploy creates AppImage with lowercase name and arch suffix
+          for f in *-x86_64.AppImage *-aarch64.AppImage; do
+            if [ -f "$f" ]; then
+              mv "$f" CodeSwitch.AppImage
+              echo "Renamed $f -> CodeSwitch.AppImage"
+              break
+            fi
+          done
           ls -la CodeSwitch.AppImage
 
       - name: Set nfpm script permissions
