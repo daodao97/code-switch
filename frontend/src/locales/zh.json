@@ -165,7 +165,7 @@
         "error": "导入 cc-switch 配置失败"
       },
       "firstRun": {
-        "message": "欢迎使用 Code Switch！如果你有 cc-switch 的配置，可以前往设置页导入。",
+        "message": "欢迎使用 Code Switch R！如果你有 cc-switch 的配置，可以前往设置页导入。",
         "goToSettings": "前往设置",
         "dismiss": "稍后"
       },

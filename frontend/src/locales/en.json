@@ -164,7 +164,7 @@
         "error": "Failed to import cc-switch config"
       },
       "firstRun": {
-        "message": "Welcome to Code Switch! If you have cc-switch config, you can import it from Settings.",
+        "message": "Welcome to Code Switch R! If you have cc-switch config, you can import it from Settings.",
         "goToSettings": "Go to Settings",
         "dismiss": "Later"
       },

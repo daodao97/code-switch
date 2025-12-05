@@ -216,7 +216,7 @@ func main() {
 	// 'BackgroundColour' is the background colour of the window.
 	// 'URL' is the URL that will be loaded into the webview.
 	mainWindow := app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:     "Code Switch",
+		Title:     "Code Switch R",
 		Width:     1024,
 		Height:    800,
 		MinWidth:  600,
