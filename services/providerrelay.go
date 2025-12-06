@@ -1035,6 +1035,32 @@ func (prs *ProviderRelayService) geminiProxyHandler(apiVersion string) gin.Handl
 	}
 }
 
+// extractGeminiModelFromEndpoint 从 Gemini API endpoint 中提取模型名
+// 例如 "/v1beta/models/gemini-2.5-pro:generateContent?alt=sse" -> "gemini-2.5-pro"
+func extractGeminiModelFromEndpoint(endpoint string) string {
+	if endpoint == "" {
+		return ""
+	}
+	// 移除查询参数
+	if qIdx := strings.Index(endpoint, "?"); qIdx >= 0 {
+		endpoint = endpoint[:qIdx]
+	}
+	// 查找 models/ 后面的部分
+	idx := strings.Index(endpoint, "models/")
+	if idx == -1 {
+		return ""
+	}
+	rest := endpoint[idx+len("models/"):]
+	if rest == "" {
+		return ""
+	}
+	// 移除动作部分（如 :generateContent, :streamGenerateContent）
+	if colonIdx := strings.Index(rest, ":"); colonIdx >= 0 {
+		rest = rest[:colonIdx]
+	}
+	return strings.TrimSpace(rest)
+}
+
 // forwardGeminiRequest 转发 Gemini 请求到指定 provider
 // 返回 (成功, 错误信息)
 func (prs *ProviderRelayService) forwardGeminiRequest(
@@ -1052,7 +1078,12 @@ func (prs *ProviderRelayService) forwardGeminiRequest(
 
 	// 预先填充日志，保证失败也能记录 provider 和模型
 	requestLog.Provider = provider.Name
-	requestLog.Model = provider.Model
+	// 优先从 endpoint 提取模型名（如 gemini-2.5-pro），否则回退到 provider.Model
+	if extractedModel := extractGeminiModelFromEndpoint(endpoint); extractedModel != "" {
+		requestLog.Model = extractedModel
+	} else {
+		requestLog.Model = provider.Model
+	}
 
 	// 创建 HTTP 请求
 	req, err := http.NewRequest("POST", targetURL, bytes.NewReader(bodyBytes))
