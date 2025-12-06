@@ -447,6 +447,28 @@
         },
         "deleteTitle": "Delete MCP server",
         "deleteMessage": "Are you sure you want to delete {name}? This action cannot be undone."
+      },
+      "jsonImport": {
+        "tabForm": "Form",
+        "tabJson": "Paste JSON",
+        "inputLabel": "Paste MCP Config JSON",
+        "inputPlaceholder": "Supports Claude Desktop format, array format, or single server format...",
+        "formatHint": "Supported formats: {\"mcpServers\": {...}}, [{...}], or {\"command\": ...}",
+        "parse": "Parse",
+        "parsing": "Parsing...",
+        "emptyInput": "Please enter JSON content",
+        "parseError": "Failed to parse JSON",
+        "fillForm": "Form filled. Please provide a server name.",
+        "serverCount": "{count} server(s)",
+        "reset": "Reset",
+        "unnamed": "Unnamed",
+        "importAll": "Import All",
+        "importSuccess": "Successfully imported {count} MCP server(s)",
+        "importError": "Import failed. Please try again.",
+        "conflictWarning": "The following servers already exist: {names}",
+        "conflictSkip": "Skip conflicts",
+        "conflictOverwrite": "Overwrite existing",
+        "conflictRename": "Rename and import"
       }
     },
     "gemini": {

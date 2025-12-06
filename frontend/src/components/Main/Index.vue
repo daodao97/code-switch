@@ -1578,6 +1578,20 @@ const getLevelDescription = (level: number) => {
   return descriptions[level] || t('components.main.levelDesc.normal')
 }
 
+// 归一化 level：空/非法视为 1（最高优先级），范围限制 1-10
+const normalizeLevel = (level: number | string | undefined): number => {
+  const num = Number(level)
+  if (!Number.isFinite(num) || num < 1) return 1
+  if (num > 10) return 10
+  return Math.floor(num)  // 确保返回整数
+}
+
+// 按 level 升序排序；同级保持原有顺序（依赖现代 JS 稳定排序，不破坏拖拽顺序）
+const sortProvidersByLevel = (list: AutomationCard[]) => {
+  if (!Array.isArray(list)) return
+  list.sort((a, b) => normalizeLevel(a.level) - normalizeLevel(b.level))
+}
+
 const modalState = reactive({
   open: false,
   tabId: tabs[0].id as ProviderTab,
@@ -1647,17 +1661,23 @@ const submitModal = async () => {
   }
 
   if (editingCard.value) {
+    // 仅当 level 变化时才重新排序，避免破坏同级拖拽顺序
+    const prevLevel = normalizeLevel(editingCard.value.level)
+    const nextLevel = normalizeLevel(modalState.form.level)
     Object.assign(editingCard.value, {
       apiUrl: apiUrl || editingCard.value.apiUrl,
       apiKey,
       officialSite,
       icon,
-      level: modalState.form.level || 1,
+      level: nextLevel,
       enabled: modalState.form.enabled,
       supportedModels: modalState.form.supportedModels || {},
       modelMapping: modalState.form.modelMapping || {},
       cliConfig: modalState.form.cliConfig || {},
     })
+    if (prevLevel !== nextLevel) {
+      sortProvidersByLevel(list)
+    }
     await persistProviders(modalState.tabId)
   } else {
     const newCard: AutomationCard = {
@@ -1669,13 +1689,14 @@ const submitModal = async () => {
       icon,
       accent: '#0a84ff',
       tint: 'rgba(15, 23, 42, 0.12)',
-      level: modalState.form.level || 1,
+      level: normalizeLevel(modalState.form.level),
       enabled: modalState.form.enabled,
       supportedModels: modalState.form.supportedModels || {},
       modelMapping: modalState.form.modelMapping || {},
       cliConfig: modalState.form.cliConfig || {},
     }
     list.push(newCard)
+    sortProvidersByLevel(list)
     await persistProviders(modalState.tabId)
   }
 

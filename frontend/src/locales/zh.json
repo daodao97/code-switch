@@ -448,6 +448,28 @@
         },
         "deleteTitle": "删除 MCP 服务器",
         "deleteMessage": "确认删除 {name} 吗？操作不可撤销"
+      },
+      "jsonImport": {
+        "tabForm": "表单填写",
+        "tabJson": "粘贴 JSON",
+        "inputLabel": "粘贴 MCP 配置 JSON",
+        "inputPlaceholder": "支持 Claude Desktop 格式、数组格式或单服务器格式...",
+        "formatHint": "支持格式：{\"mcpServers\": {...}}、[{...}] 或 {\"command\": ...}",
+        "parse": "解析",
+        "parsing": "解析中...",
+        "emptyInput": "请输入 JSON 内容",
+        "parseError": "JSON 解析失败",
+        "fillForm": "已填充表单，请补充服务器名称",
+        "serverCount": "共 {count} 个服务器",
+        "reset": "重新输入",
+        "unnamed": "未命名",
+        "importAll": "全部导入",
+        "importSuccess": "成功导入 {count} 个 MCP 服务器",
+        "importError": "导入失败，请重试",
+        "conflictWarning": "以下服务器已存在：{names}",
+        "conflictSkip": "跳过冲突",
+        "conflictOverwrite": "覆盖现有",
+        "conflictRename": "重命名导入"
       }
     },
     "gemini": {

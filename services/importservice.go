@@ -3,11 +3,13 @@ package services
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -690,4 +692,327 @@ func containsPlatform(list []string, platform string) bool {
 		}
 	}
 	return false
+}
+
+// ========== MCP JSON 导入功能 ==========
+
+// MCPParseResult JSON 解析结果
+type MCPParseResult struct {
+	Servers   []MCPServer `json:"servers"`   // 解析出的服务器列表
+	Conflicts []string    `json:"conflicts"` // 与现有配置冲突的名称
+	NeedName  bool        `json:"needName"`  // 是否需要用户提供名称（单服务器无名时）
+}
+
+// ParseMCPJSON 解析 JSON 字符串为 MCP 服务器列表
+// 支持三种格式：
+// 1. {"mcpServers": {"name": {...}}} - Claude Desktop 格式
+// 2. [{"name": "...", "command": "..."}] - 数组格式
+// 3. {"command": "...", "args": [...]} - 单服务器格式
+func (is *ImportService) ParseMCPJSON(jsonStr string) (*MCPParseResult, error) {
+	jsonStr = strings.TrimSpace(jsonStr)
+	if jsonStr == "" {
+		return nil, errors.New("JSON 内容为空")
+	}
+
+	// 先解析为 interface{} 判断类型
+	var raw interface{}
+	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
+		return nil, errors.New("JSON 格式无效: " + err.Error())
+	}
+
+	var servers []MCPServer
+	var needName bool
+
+	switch v := raw.(type) {
+	case map[string]interface{}:
+		// 检查是否是 Claude Desktop 格式
+		if mcpServers, ok := v["mcpServers"]; ok {
+			if serversMap, ok := mcpServers.(map[string]interface{}); ok {
+				parsed, err := parseMCPServersMap(serversMap)
+				if err != nil {
+					return nil, err
+				}
+				servers = parsed
+			} else {
+				return nil, errors.New("mcpServers 字段格式无效，应为对象")
+			}
+		} else {
+			// 尝试解析为单服务器
+			server, need, err := parseSingleServer(v, "")
+			if err != nil {
+				return nil, err
+			}
+			servers = []MCPServer{server}
+			needName = need
+		}
+
+	case []interface{}:
+		// 数组格式
+		parsed, err := parseMCPServersArray(v)
+		if err != nil {
+			return nil, err
+		}
+		servers = parsed
+
+	default:
+		return nil, errors.New("JSON 格式无效，应为对象或数组")
+	}
+
+	if len(servers) == 0 {
+		return nil, errors.New("未找到有效的 MCP 服务器配置")
+	}
+
+	// 检查与现有配置的冲突
+	conflicts := is.checkMCPConflicts(servers)
+
+	return &MCPParseResult{
+		Servers:   servers,
+		Conflicts: conflicts,
+		NeedName:  needName,
+	}, nil
+}
+
+// parseMCPServersMap 解析 {"name": {...}, ...} 格式
+func parseMCPServersMap(serversMap map[string]interface{}) ([]MCPServer, error) {
+	servers := make([]MCPServer, 0, len(serversMap))
+	for name, serverData := range serversMap {
+		serverMap, ok := serverData.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		server, _, err := parseSingleServer(serverMap, name)
+		if err != nil {
+			return nil, errors.New("服务器 '" + name + "' 配置无效: " + err.Error())
+		}
+		servers = append(servers, server)
+	}
+	return servers, nil
+}
+
+// parseMCPServersArray 解析数组格式
+func parseMCPServersArray(arr []interface{}) ([]MCPServer, error) {
+	servers := make([]MCPServer, 0, len(arr))
+	for i, item := range arr {
+		idx := i + 1 // 使用 1 基索引，对用户更友好
+		serverMap, ok := item.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("数组第 %d 项不是有效的对象", idx)
+		}
+		// 从数组元素中提取 name
+		name := ""
+		if n, ok := serverMap["name"].(string); ok {
+			name = strings.TrimSpace(n)
+		}
+		server, _, err := parseSingleServer(serverMap, name)
+		if err != nil {
+			if name != "" {
+				return nil, fmt.Errorf("服务器 '%s' 配置无效: %v", name, err)
+			}
+			return nil, fmt.Errorf("数组第 %d 项配置无效: %v", idx, err)
+		}
+		// 如果数组元素没有 name，生成一个
+		if server.Name == "" {
+			server.Name = fmt.Sprintf("imported-%d", idx)
+		}
+		servers = append(servers, server)
+	}
+	return servers, nil
+}
+
+// parseSingleServer 解析单个服务器配置
+func parseSingleServer(data map[string]interface{}, name string) (MCPServer, bool, error) {
+	server := MCPServer{
+		Name:           strings.TrimSpace(name),
+		EnablePlatform: []string{platClaudeCode, platCodex}, // 默认启用两个平台
+	}
+	needName := false
+
+	// 解析 type
+	if t, ok := data["type"].(string); ok {
+		server.Type = strings.TrimSpace(t)
+	}
+
+	// 解析 command
+	if cmd, ok := data["command"].(string); ok {
+		server.Command = strings.TrimSpace(cmd)
+	}
+
+	// 解析 args
+	if args, ok := data["args"].([]interface{}); ok {
+		for _, arg := range args {
+			if s, ok := arg.(string); ok {
+				server.Args = append(server.Args, s)
+			}
+		}
+	}
+
+	// 解析 env
+	if env, ok := data["env"].(map[string]interface{}); ok {
+		server.Env = make(map[string]string)
+		for k, v := range env {
+			if s, ok := v.(string); ok {
+				server.Env[k] = s
+			}
+		}
+	}
+
+	// 解析 url
+	if url, ok := data["url"].(string); ok {
+		server.URL = strings.TrimSpace(url)
+	}
+
+	// 解析可选字段
+	if website, ok := data["website"].(string); ok {
+		server.Website = strings.TrimSpace(website)
+	}
+	if tips, ok := data["tips"].(string); ok {
+		server.Tips = strings.TrimSpace(tips)
+	}
+
+	// 自动推断类型
+	if server.Type == "" {
+		if server.URL != "" {
+			server.Type = "http"
+		} else if server.Command != "" {
+			server.Type = "stdio"
+		}
+	}
+
+	// 验证必需字段
+	if server.Type == "" {
+		return server, false, errors.New("缺少 type 字段，且无法从 command/url 推断")
+	}
+	if server.Type == "stdio" && server.Command == "" {
+		return server, false, errors.New("stdio 类型需要 command 字段")
+	}
+	if server.Type == "http" && server.URL == "" {
+		return server, false, errors.New("http 类型需要 url 字段")
+	}
+
+	// 检查是否需要名称
+	if server.Name == "" {
+		needName = true
+	}
+
+	return server, needName, nil
+}
+
+// checkMCPConflicts 检查与现有配置的冲突
+func (is *ImportService) checkMCPConflicts(servers []MCPServer) []string {
+	existing, err := is.mcpService.ListServers()
+	if err != nil {
+		return nil
+	}
+	existingNames := make(map[string]struct{}, len(existing))
+	for _, s := range existing {
+		existingNames[strings.ToLower(s.Name)] = struct{}{}
+	}
+
+	var conflicts []string
+	for _, s := range servers {
+		if _, exists := existingNames[strings.ToLower(s.Name)]; exists {
+			conflicts = append(conflicts, s.Name)
+		}
+	}
+	return conflicts
+}
+
+// ImportMCPFromJSON 导入解析后的 MCP 服务器（用于多服务器批量导入）
+func (is *ImportService) ImportMCPFromJSON(servers []MCPServer, conflictStrategy string) (int, error) {
+	if len(servers) == 0 {
+		return 0, nil
+	}
+
+	existing, err := is.mcpService.ListServers()
+	if err != nil {
+		return 0, err
+	}
+
+	// 使用 map 追踪所有已知名称（现有 + 新增）
+	existingMap := make(map[string]int, len(existing))
+	for i, s := range existing {
+		existingMap[strings.ToLower(s.Name)] = i
+	}
+
+	// 追踪本次导入中已使用的名称，防止导入列表内部重复
+	usedNames := make(map[string]struct{})
+	for name := range existingMap {
+		usedNames[name] = struct{}{}
+	}
+
+	merged := make([]MCPServer, len(existing))
+	copy(merged, existing)
+	imported := 0
+
+	for _, server := range servers {
+		lowerName := strings.ToLower(server.Name)
+
+		// 检查是否与导入列表内已处理的项重复
+		if _, used := usedNames[lowerName]; used && conflictStrategy != "overwrite" {
+			// 非覆盖模式下，跳过导入列表内的重复项
+			if conflictStrategy == "skip" {
+				continue
+			}
+			// rename 模式也需要重命名
+		}
+
+		if idx, exists := existingMap[lowerName]; exists {
+			switch conflictStrategy {
+			case "overwrite":
+				// 覆盖
+				merged[idx] = server
+				imported++
+			case "skip":
+				// 跳过
+				continue
+			case "rename":
+				// 重命名：生成唯一名称
+				newName := generateUniqueName(server.Name, usedNames)
+				server.Name = newName
+				usedNames[strings.ToLower(newName)] = struct{}{}
+				merged = append(merged, server)
+				imported++
+			default:
+				// 默认跳过
+				continue
+			}
+		} else {
+			// 检查是否与本次导入中的其他项重名
+			if _, used := usedNames[lowerName]; used {
+				if conflictStrategy == "rename" {
+					newName := generateUniqueName(server.Name, usedNames)
+					server.Name = newName
+					usedNames[strings.ToLower(newName)] = struct{}{}
+				} else {
+					// skip 或其他策略：跳过重复
+					continue
+				}
+			} else {
+				usedNames[lowerName] = struct{}{}
+			}
+			merged = append(merged, server)
+			imported++
+		}
+	}
+
+	if err := is.mcpService.SaveServers(merged); err != nil {
+		return 0, err
+	}
+	return imported, nil
+}
+
+// generateUniqueName 生成唯一名称，避免与已有名称冲突
+func generateUniqueName(baseName string, usedNames map[string]struct{}) string {
+	candidate := baseName + "-imported"
+	if _, exists := usedNames[strings.ToLower(candidate)]; !exists {
+		return candidate
+	}
+	for i := 2; i <= 100; i++ {
+		candidate = fmt.Sprintf("%s-imported-%d", baseName, i)
+		if _, exists := usedNames[strings.ToLower(candidate)]; !exists {
+			return candidate
+		}
+	}
+	// 极端情况：返回带时间戳的名称
+	return fmt.Sprintf("%s-imported-%d", baseName, time.Now().UnixNano())
 }
