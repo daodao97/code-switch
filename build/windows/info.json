@@ -5,11 +5,11 @@
 	"info": {
 		"0000": {
 			"ProductVersion": "0.1.0",
-			"CompanyName": "Code Switch R",
+			"CompanyName": "Code Switch",
 			"FileDescription": "Manage Claude & Codex relays, providers, and request logs.",
-			"LegalCopyright": "(c) 2025, Code Switch R",
-			"ProductName": "Code Switch R",
-			"Comments": "Code Switch R desktop relay controller"
+			"LegalCopyright": "(c) 2025, Code Switch",
+			"ProductName": "Code Switch",
+			"Comments": "Code Switch desktop relay controller"
 		}
 	}
 }

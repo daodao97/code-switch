@@ -25,6 +25,7 @@ const homeTitleVisible = ref(getCachedValue('homeTitle', true))
 const autoStartEnabled = ref(getCachedValue('autoStart', false))
 const autoUpdateEnabled = ref(getCachedValue('autoUpdate', true))
 const autoConnectivityTestEnabled = ref(getCachedValue('autoConnectivityTest', false))
+const switchNotifyEnabled = ref(getCachedValue('switchNotify', true)) // 切换通知开关
 const settingsLoading = ref(true)
 const saveBusy = ref(false)
 
@@ -61,6 +62,7 @@ const loadAppSettings = async () => {
     autoStartEnabled.value = data?.auto_start ?? false
     autoUpdateEnabled.value = data?.auto_update ?? true
     autoConnectivityTestEnabled.value = data?.auto_connectivity_test ?? false
+    switchNotifyEnabled.value = data?.enable_switch_notify ?? true
 
     // 缓存到 localStorage，下次打开时直接显示正确状态
     localStorage.setItem('app-settings-heatmap', String(heatmapEnabled.value))
@@ -68,6 +70,7 @@ const loadAppSettings = async () => {
     localStorage.setItem('app-settings-autoStart', String(autoStartEnabled.value))
     localStorage.setItem('app-settings-autoUpdate', String(autoUpdateEnabled.value))
     localStorage.setItem('app-settings-autoConnectivityTest', String(autoConnectivityTestEnabled.value))
+    localStorage.setItem('app-settings-switchNotify', String(switchNotifyEnabled.value))
   } catch (error) {
     console.error('failed to load app settings', error)
     heatmapEnabled.value = true
@@ -75,6 +78,7 @@ const loadAppSettings = async () => {
     autoStartEnabled.value = false
     autoUpdateEnabled.value = true
     autoConnectivityTestEnabled.value = false
+    switchNotifyEnabled.value = true
   } finally {
     settingsLoading.value = false
   }
@@ -90,6 +94,7 @@ const persistAppSettings = async () => {
       auto_start: autoStartEnabled.value,
       auto_update: autoUpdateEnabled.value,
       auto_connectivity_test: autoConnectivityTestEnabled.value,
+      enable_switch_notify: switchNotifyEnabled.value,
     }
     await saveAppSettings(payload)
 
@@ -105,6 +110,7 @@ const persistAppSettings = async () => {
     localStorage.setItem('app-settings-autoStart', String(autoStartEnabled.value))
     localStorage.setItem('app-settings-autoUpdate', String(autoUpdateEnabled.value))
     localStorage.setItem('app-settings-autoConnectivityTest', String(autoConnectivityTestEnabled.value))
+    localStorage.setItem('app-settings-switchNotify', String(switchNotifyEnabled.value))
 
     window.dispatchEvent(new CustomEvent('app-settings-updated'))
   } catch (error) {
@@ -409,6 +415,20 @@ onMounted(async () => {
               />
               <span></span>
             </label>
+          </ListItem>
+          <ListItem :label="$t('components.general.label.switchNotify')">
+            <div class="toggle-with-hint">
+              <label class="mac-switch">
+                <input
+                  type="checkbox"
+                  :disabled="settingsLoading || saveBusy"
+                  v-model="switchNotifyEnabled"
+                  @change="persistAppSettings"
+                />
+                <span></span>
+              </label>
+              <span class="hint-text">{{ $t('components.general.label.switchNotifyHint') }}</span>
+            </div>
           </ListItem>
         </div>
       </section>

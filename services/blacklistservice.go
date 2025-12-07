@@ -11,7 +11,8 @@ import (
 
 // BlacklistService 管理供应商黑名单
 type BlacklistService struct {
-	settingsService *SettingsService
+	settingsService     *SettingsService
+	notificationService *NotificationService
 }
 
 // BlacklistStatus 黑名单状态（用于前端展示）
@@ -31,9 +32,10 @@ type BlacklistStatus struct {
 	ForgivenessRemaining int        `json:"forgivenessRemaining"` // 距离宽恕还剩多少秒（3小时倒计时）
 }
 
-func NewBlacklistService(settingsService *SettingsService) *BlacklistService {
+func NewBlacklistService(settingsService *SettingsService, notificationService *NotificationService) *BlacklistService {
 	return &BlacklistService{
-		settingsService: settingsService,
+		settingsService:     settingsService,
+		notificationService: notificationService,
 	}
 }
 
@@ -303,6 +305,11 @@ func (bs *BlacklistService) RecordFailure(platform string, providerName string) 
 
 		log.Printf("⛔ Provider %s/%s 已拉黑（L%d → L%d，%d 分钟），过期时间: %s",
 			platform, providerName, blacklistLevel, newLevel, duration, blacklistedUntil.Format("15:04:05"))
+
+		// 发送拉黑通知
+		if bs.notificationService != nil {
+			bs.notificationService.NotifyProviderBlacklisted(platform, providerName, newLevel, duration)
+		}
 
 	} else {
 		// 未达到阈值，仅更新失败计数和窗口起始时间

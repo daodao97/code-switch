@@ -20,17 +20,18 @@ import (
 )
 
 type ProviderRelayService struct {
-	providerService  *ProviderService
-	geminiService    *GeminiService
-	blacklistService *BlacklistService
-	server           *http.Server
-	addr             string
+	providerService     *ProviderService
+	geminiService       *GeminiService
+	blacklistService    *BlacklistService
+	notificationService *NotificationService
+	server              *http.Server
+	addr                string
 }
 
 // errClientAbort 表示客户端中断连接，不应计入 provider 失败次数
 var errClientAbort = errors.New("client aborted, skip failure count")
 
-func NewProviderRelayService(providerService *ProviderService, geminiService *GeminiService, blacklistService *BlacklistService, addr string) *ProviderRelayService {
+func NewProviderRelayService(providerService *ProviderService, geminiService *GeminiService, blacklistService *BlacklistService, notificationService *NotificationService, addr string) *ProviderRelayService {
 	if addr == "" {
 		addr = "127.0.0.1:18100" // 【安全修复】仅监听本地回环地址，防止 API Key 暴露到局域网
 	}
@@ -39,10 +40,11 @@ func NewProviderRelayService(providerService *ProviderService, geminiService *Ge
 	// 此处不再调用 xdb.Inits()、ensureRequestLogTable()、ensureBlacklistTables()
 
 	return &ProviderRelayService{
-		providerService:  providerService,
-		geminiService:    geminiService,
-		blacklistService: blacklistService,
-		addr:             addr,
+		providerService:     providerService,
+		geminiService:       geminiService,
+		blacklistService:    blacklistService,
+		notificationService: notificationService,
+		addr:                addr,
 	}
 }
 
@@ -382,6 +384,31 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 					fmt.Printf("[INFO] 客户端中断，跳过失败计数: %s\n", provider.Name)
 				} else if err := prs.blacklistService.RecordFailure(kind, provider.Name); err != nil {
 					fmt.Printf("[ERROR] 记录失败到黑名单失败: %v\n", err)
+				}
+
+				// 发送切换通知：检查是否有下一个可用的 provider
+				if prs.notificationService != nil {
+					nextProvider := ""
+					// 先查找同级别的下一个
+					if i+1 < len(providersInLevel) {
+						nextProvider = providersInLevel[i+1].Name
+					} else {
+						// 查找下一个 level 的第一个 provider
+						for _, nextLevel := range levels {
+							if nextLevel > level && len(levelGroups[nextLevel]) > 0 {
+								nextProvider = levelGroups[nextLevel][0].Name
+								break
+							}
+						}
+					}
+					if nextProvider != "" {
+						prs.notificationService.NotifyProviderSwitch(SwitchNotification{
+							FromProvider: provider.Name,
+							ToProvider:   nextProvider,
+							Reason:       errorMsg,
+							Platform:     kind,
+						})
+					}
 				}
 			}
 

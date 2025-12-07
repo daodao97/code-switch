@@ -349,6 +349,8 @@
         "heatmap": "Show dashboard heatmap",
         "homeTitle": "Show home title",
         "autoStart": "Launch at login",
+        "switchNotify": "Switch Notification",
+        "switchNotifyHint": "Send system notification when provider switches or gets blacklisted",
         "autoUpdate": "Automatic update",
         "autoConnectivityTest": "Auto connectivity test",
         "autoConnectivityTestHint": "Test enabled providers every minute",

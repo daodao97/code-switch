@@ -348,6 +348,8 @@
         "heatmap": "显示主界面热力墙",
         "homeTitle": "显示首页标题",
         "autoStart": "开机自启动",
+        "switchNotify": "切换通知",
+        "switchNotifyHint": "供应商切换或拉黑时发送系统通知",
         "autoUpdate": "自动更新",
         "lastCheck": "上次检查",
         "currentVersion": "当前版本",

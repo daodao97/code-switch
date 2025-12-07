@@ -15,6 +15,11 @@ export class AppSettings {
     "auto_start": boolean;
     "auto_update": boolean;
 
+    /**
+     * 供应商切换通知开关
+     */
+    "enable_switch_notify": boolean;
+
     /** Creates a new AppSettings instance. */
     constructor($$source: Partial<AppSettings> = {}) {
         if (!("show_heatmap" in $$source)) {
@@ -28,6 +33,9 @@ export class AppSettings {
         }
         if (!("auto_update" in $$source)) {
             this["auto_update"] = false;
+        }
+        if (!("enable_switch_notify" in $$source)) {
+            this["enable_switch_notify"] = false;
         }
 
         Object.assign(this, $$source);
