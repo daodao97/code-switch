@@ -1525,6 +1525,18 @@ html.dark .ghost-icon:hover {
   background: rgba(15, 23, 42, 0.06);
 }
 
+/* 深色模式下的 outline 按钮适配 */
+html.dark .btn-outline {
+  border-color: rgba(255, 255, 255, 0.25);
+  color: var(--mac-text);
+}
+
+html.dark .btn-outline:hover,
+html.dark .btn-outline:focus-visible {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
 .btn-primary {
   background: var(--mac-accent);
   color: #fff;
@@ -1534,6 +1546,59 @@ html.dark .ghost-icon:hover {
 .btn-danger {
   background: #ff3b30;
   color: #fff;
+}
+
+/* 次要按钮样式（用于控制台等页面） */
+.secondary-btn {
+  border: 1px solid var(--mac-border);
+  border-radius: 8px;
+  padding: 8px 16px;
+  background: var(--mac-surface-strong);
+  color: var(--mac-text);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.secondary-btn:hover:not(:disabled) {
+  background: var(--mac-surface);
+  border-color: var(--mac-accent);
+}
+
+.secondary-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.secondary-btn:focus-visible:not(:disabled) {
+  outline: 2px solid var(--mac-accent);
+  outline-offset: 2px;
+}
+
+.secondary-btn:active:not(:disabled) {
+  background: var(--mac-surface);
+  border-color: var(--mac-accent);
+}
+
+/* 深色模式下的 secondary 按钮 */
+html.dark .secondary-btn {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+html.dark .secondary-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+html.dark .secondary-btn:focus-visible:not(:disabled) {
+  outline-color: rgba(255, 255, 255, 0.6);
+}
+
+html.dark .secondary-btn:active:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.35);
 }
 
 .switch-inline {

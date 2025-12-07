@@ -199,7 +199,7 @@
         },
         "hints": {
           "level": "数字越小优先级越高，Level 1 会被优先尝试，失败后依次尝试 Level 2、Level 3 等",
-          "connectivityCheck": "启用后会定期检测此供应商的连通性"
+          "connectivityCheck": "启用后会定期检测此供应商的连通性，开启该选项可能会消耗少量 tokens"
         },
         "actions": {
           "cancel": "取消",

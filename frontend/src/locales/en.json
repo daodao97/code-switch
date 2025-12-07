@@ -198,7 +198,7 @@
         },
         "hints": {
           "level": "Lower numbers = higher priority. Level 1 providers are tried first, then Level 2, etc.",
-          "connectivityCheck": "When enabled, connectivity to this provider will be tested periodically"
+          "connectivityCheck": "When enabled, connectivity to this provider will be tested periodically; enabling this may consume a small amount of tokens"
         },
         "actions": {
           "cancel": "Cancel",
