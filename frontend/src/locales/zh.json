@@ -328,7 +328,11 @@
       "streamOff": "非流",
       "back": "返回主页",
       "nextRefresh": "距离下次刷新 {seconds}s",
-      "query": "查询"
+      "query": "查询",
+      "costDetail": {
+        "title": "今日消费明细",
+        "empty": "今日暂无消费记录"
+      }
     },
     "general": {
       "title": {

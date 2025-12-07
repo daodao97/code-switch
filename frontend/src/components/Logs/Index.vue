@@ -13,7 +13,12 @@
     </div>
 
     <section class="logs-summary" v-if="statsCards.length">
-      <article v-for="card in statsCards" :key="card.key" class="summary-card">
+      <article
+        v-for="card in statsCards"
+        :key="card.key"
+        :class="['summary-card', { 'summary-card--clickable': card.key === 'cost' }]"
+        @click="card.key === 'cost' && openCostDetailModal()"
+      >
         <div class="summary-card__label">{{ card.label }}</div>
         <div class="summary-card__value">{{ card.value }}</div>
         <div class="summary-card__hint">{{ card.hint }}</div>
@@ -117,6 +122,28 @@
         </BaseButton>
       </div>
     </div>
+
+    <!-- 金额明细弹窗 -->
+    <BaseModal
+      :open="costDetailModal.open"
+      :title="t('components.logs.costDetail.title')"
+      @close="closeCostDetailModal"
+    >
+      <div class="cost-detail-modal">
+        <p v-if="costDetailModal.loading" class="cost-detail-loading">
+          {{ t('components.logs.loading') }}
+        </p>
+        <div v-else-if="costDetailModal.data.length === 0" class="cost-detail-empty">
+          {{ t('components.logs.costDetail.empty') }}
+        </div>
+        <ul v-else class="cost-detail-list">
+          <li v-for="item in costDetailModal.data" :key="item.provider" class="cost-detail-item">
+            <span class="cost-detail-item__name">{{ item.provider }}</span>
+            <span class="cost-detail-item__value">{{ formatCurrency(item.cost_total) }}</span>
+          </li>
+        </ul>
+      </div>
+    </BaseModal>
   </div>
 </template>
 
@@ -125,14 +152,17 @@ import { computed, reactive, ref, onMounted, watch, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import BaseButton from '../common/BaseButton.vue'
+import BaseModal from '../common/BaseModal.vue'
 import {
   fetchRequestLogs,
   fetchLogProviders,
   fetchLogStats,
+  fetchProviderDailyStats,
   type RequestLog,
   type LogStats,
   type LogStatsSeries,
   type LogPlatform,
+  type ProviderDailyStat,
 } from '../../services/logs'
 import {
   Chart,
@@ -159,6 +189,41 @@ const page = ref(1)
 const PAGE_SIZE = 15
 const providerOptions = ref<string[]>([])
 const statsSeries = computed<LogStatsSeries[]>(() => stats.value?.series ?? [])
+
+// 金额明细弹窗状态
+const costDetailModal = reactive<{
+  open: boolean
+  loading: boolean
+  data: ProviderDailyStat[]
+}>({
+  open: false,
+  loading: false,
+  data: [],
+})
+
+// 打开金额明细弹窗
+const openCostDetailModal = async () => {
+  costDetailModal.open = true
+  costDetailModal.loading = true
+  costDetailModal.data = []
+
+  try {
+    const stats = await fetchProviderDailyStats(filters.platform)
+    // 按金额降序排序，过滤掉金额为 0 的
+    costDetailModal.data = (stats ?? [])
+      .filter(item => item.cost_total > 0)
+      .sort((a, b) => b.cost_total - a.cost_total)
+  } catch (error) {
+    console.error('failed to load provider daily stats', error)
+  } finally {
+    costDetailModal.loading = false
+  }
+}
+
+// 关闭金额明细弹窗
+const closeCostDetailModal = () => {
+  costDetailModal.open = false
+}
 
 const parseLogDate = (value?: string) => {
   if (!value) return null
@@ -584,5 +649,74 @@ html.dark .summary-card__hint {
   .logs-summary {
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   }
+}
+
+/* 可点击卡片 */
+.summary-card--clickable {
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.summary-card--clickable:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(249, 115, 22, 0.15);
+}
+.summary-card--clickable:active {
+  transform: translateY(0);
+}
+html.dark .summary-card--clickable:hover {
+  box-shadow: 0 4px 12px rgba(249, 115, 22, 0.25);
+}
+
+/* 弹窗内容 */
+.cost-detail-modal {
+  min-height: 120px;
+}
+.cost-detail-loading,
+.cost-detail-empty {
+  text-align: center;
+  color: #64748b;
+  padding: 2rem 0;
+}
+html.dark .cost-detail-loading,
+html.dark .cost-detail-empty {
+  color: #94a3b8;
+}
+.cost-detail-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.cost-detail-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  background: rgba(148, 163, 184, 0.08);
+  border-radius: 8px;
+  transition: background 0.15s ease;
+}
+.cost-detail-item:hover {
+  background: rgba(148, 163, 184, 0.12);
+}
+html.dark .cost-detail-item {
+  background: rgba(148, 163, 184, 0.12);
+}
+html.dark .cost-detail-item:hover {
+  background: rgba(148, 163, 184, 0.18);
+}
+.cost-detail-item__name {
+  font-weight: 500;
+  color: #1e293b;
+}
+html.dark .cost-detail-item__name {
+  color: #f1f5f9;
+}
+.cost-detail-item__value {
+  font-weight: 600;
+  color: #f97316;
+  font-variant-numeric: tabular-nums;
 }
 </style>

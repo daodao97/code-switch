@@ -151,15 +151,12 @@ func (ns *NotificationService) emitSwitchEvent(info SwitchNotification) {
 	if ns.app == nil {
 		return
 	}
-	ns.app.Events.Emit(&application.WailsEvent{
-		Name: "provider:switched",
-		Data: map[string]interface{}{
-			"platform":     info.Platform,
-			"fromProvider": info.FromProvider,
-			"toProvider":   info.ToProvider,
-			"reason":       info.Reason,
-			"timestamp":    time.Now().UnixMilli(),
-		},
+	ns.app.Event.Emit("provider:switched", map[string]interface{}{
+		"platform":     info.Platform,
+		"fromProvider": info.FromProvider,
+		"toProvider":   info.ToProvider,
+		"reason":       info.Reason,
+		"timestamp":    time.Now().UnixMilli(),
 	})
 }
 
@@ -192,14 +189,11 @@ func (ns *NotificationService) emitBlacklistEvent(platform, providerName string,
 	if ns.app == nil {
 		return
 	}
-	ns.app.Events.Emit(&application.WailsEvent{
-		Name: "provider:blacklisted",
-		Data: map[string]interface{}{
-			"platform":        platform,
-			"providerName":    providerName,
-			"level":           level,
-			"durationMinutes": durationMinutes,
-			"timestamp":       time.Now().UnixMilli(),
-		},
+	ns.app.Event.Emit("provider:blacklisted", map[string]interface{}{
+		"platform":        platform,
+		"providerName":    providerName,
+		"level":           level,
+		"durationMinutes": durationMinutes,
+		"timestamp":       time.Now().UnixMilli(),
 	})
 }

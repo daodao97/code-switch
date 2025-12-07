@@ -327,7 +327,11 @@
       "streamOff": "Single response",
       "back": "Back to home",
       "nextRefresh": "Next refresh in {seconds}s",
-      "query": "Query"
+      "query": "Query",
+      "costDetail": {
+        "title": "Today's Cost Breakdown",
+        "empty": "No cost records today"
+      }
     },
     "general": {
       "title": {
