@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/daodao97/xgo/xdb"
@@ -19,6 +20,14 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+// LastUsedProvider 最后使用的供应商信息
+// @author sm
+type LastUsedProvider struct {
+	Platform     string `json:"platform"`      // claude/codex/gemini
+	ProviderName string `json:"provider_name"` // 供应商名称
+	UpdatedAt    int64  `json:"updated_at"`    // 更新时间（毫秒）
+}
+
 type ProviderRelayService struct {
 	providerService     *ProviderService
 	geminiService       *GeminiService
@@ -26,6 +35,8 @@ type ProviderRelayService struct {
 	notificationService *NotificationService
 	server              *http.Server
 	addr                string
+	lastUsed            map[string]*LastUsedProvider // 各平台最后使用的供应商
+	lastUsedMu          sync.RWMutex                 // 保护 lastUsed 的锁
 }
 
 // errClientAbort 表示客户端中断连接，不应计入 provider 失败次数
@@ -45,7 +56,44 @@ func NewProviderRelayService(providerService *ProviderService, geminiService *Ge
 		blacklistService:    blacklistService,
 		notificationService: notificationService,
 		addr:                addr,
+		lastUsed: map[string]*LastUsedProvider{
+			"claude": nil,
+			"codex":  nil,
+			"gemini": nil,
+		},
 	}
+}
+
+// setLastUsedProvider 记录最后使用的供应商
+// @author sm
+func (prs *ProviderRelayService) setLastUsedProvider(platform, providerName string) {
+	prs.lastUsedMu.Lock()
+	defer prs.lastUsedMu.Unlock()
+	prs.lastUsed[platform] = &LastUsedProvider{
+		Platform:     platform,
+		ProviderName: providerName,
+		UpdatedAt:    time.Now().UnixMilli(),
+	}
+}
+
+// GetLastUsedProvider 获取指定平台最后使用的供应商
+// @author sm
+func (prs *ProviderRelayService) GetLastUsedProvider(platform string) *LastUsedProvider {
+	prs.lastUsedMu.RLock()
+	defer prs.lastUsedMu.RUnlock()
+	return prs.lastUsed[platform]
+}
+
+// GetAllLastUsedProviders 获取所有平台最后使用的供应商
+// @author sm
+func (prs *ProviderRelayService) GetAllLastUsedProviders() map[string]*LastUsedProvider {
+	prs.lastUsedMu.RLock()
+	defer prs.lastUsedMu.RUnlock()
+	result := make(map[string]*LastUsedProvider)
+	for k, v := range prs.lastUsed {
+		result[k] = v
+	}
+	return result
 }
 
 func (prs *ProviderRelayService) Start() error {
@@ -288,6 +336,8 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 				if err := prs.blacklistService.RecordSuccess(kind, firstProvider.Name); err != nil {
 					fmt.Printf("[WARN] 清零失败计数失败: %v\n", err)
 				}
+				// 记录最后使用的供应商
+				prs.setLastUsedProvider(kind, firstProvider.Name)
 				return
 			}
 
@@ -363,6 +413,9 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 					if err := prs.blacklistService.RecordSuccess(kind, provider.Name); err != nil {
 						fmt.Printf("[WARN] 清零失败计数失败: %v\n", err)
 					}
+
+					// 记录最后使用的供应商
+					prs.setLastUsedProvider(kind, provider.Name)
 
 					return // 成功，立即返回
 				}
@@ -1008,6 +1061,8 @@ func (prs *ProviderRelayService) geminiProxyHandler(apiVersion string) gin.Handl
 			ok, err := prs.forwardGeminiRequest(c, firstProvider, endpoint, bodyBytes, isStream, requestLog)
 			if ok {
 				_ = prs.blacklistService.RecordSuccess("gemini", firstProvider.Name)
+				// 记录最后使用的供应商
+				prs.setLastUsedProvider("gemini", firstProvider.Name)
 			} else {
 				_ = prs.blacklistService.RecordFailure("gemini", firstProvider.Name)
 				if requestLog.HttpCode == 0 {
@@ -1038,6 +1093,8 @@ func (prs *ProviderRelayService) geminiProxyHandler(apiVersion string) gin.Handl
 				ok, errMsg := prs.forwardGeminiRequest(c, &provider, endpoint, bodyBytes, isStream, requestLog)
 				if ok {
 					_ = prs.blacklistService.RecordSuccess("gemini", provider.Name)
+					// 记录最后使用的供应商
+					prs.setLastUsedProvider("gemini", provider.Name)
 					fmt.Printf("[Gemini] ✓ 请求完成 | Provider: %s | 总耗时: %.2fs\n", provider.Name, time.Since(start).Seconds())
 					return // 成功，退出
 				}

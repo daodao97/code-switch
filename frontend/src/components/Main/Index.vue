@@ -252,12 +252,22 @@
         <article
           v-for="card in activeCards"
           :key="card.id"
-          :class="['automation-card', { dragging: draggingId === card.id }]"
+          :ref="el => { if (card.name === highlightedProvider) scrollToCard(el as HTMLElement) }"
+          :class="[
+            'automation-card',
+            { dragging: draggingId === card.id },
+            { 'is-last-used': isLastUsedProvider(card.name) },
+            { 'is-highlighted': highlightedProvider === card.name }
+          ]"
           draggable="true"
           @dragstart="onDragStart(card.id)"
           @dragend="onDragEnd"
           @drop="onDrop(card.id)"
         >
+          <!-- 正在使用标签 -->
+          <span v-if="isLastUsedProvider(card.name)" class="last-used-badge">
+            ✓ {{ t('components.main.providers.lastUsed') }}
+          </span>
           <div class="card-leading">
             <div class="card-icon" :style="{ backgroundColor: card.tint, color: card.accent }">
               <span
@@ -632,7 +642,7 @@
 import { computed, reactive, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Listbox, ListboxButton, ListboxOptions, ListboxOption } from '@headlessui/vue'
-import { Browser, Call } from '@wailsio/runtime'
+import { Browser, Call, Events } from '@wailsio/runtime'
 import {
 	buildUsageHeatmapMatrix,
 	generateFallbackUsageHeatmap,
@@ -743,6 +753,22 @@ const connectivityResultsMap = reactive<Record<ProviderTab, Record<number, Conne
   codex: {},
   gemini: {},
 })
+
+// 最后使用的供应商（用于高亮显示）
+// @author sm
+interface LastUsedProvider {
+  platform: string
+  provider_name: string
+  updated_at: number
+}
+const lastUsedProviders = reactive<Record<string, LastUsedProvider | null>>({
+  claude: null,
+  codex: null,
+  gemini: null,
+})
+// 高亮闪烁的供应商名称
+const highlightedProvider = ref<string | null>(null)
+let highlightTimer: number | undefined
 
 const showImportButton = computed(() => {
   const status = importStatus.value
@@ -1482,6 +1508,91 @@ const stopProviderStatsTimer = () => {
   }
 }
 
+// 加载最后使用的供应商
+// @author sm
+const loadLastUsedProviders = async () => {
+  try {
+    const result = await Call.ByName('codeswitch/services.ProviderRelayService.GetAllLastUsedProviders')
+    if (result) {
+      Object.keys(result).forEach(platform => {
+        if (result[platform]) {
+          lastUsedProviders[platform] = result[platform]
+        }
+      })
+    }
+  } catch (err) {
+    console.error('加载最后使用的供应商失败:', err)
+  }
+}
+
+// 切换到指定平台的 Tab 并高亮供应商
+// @author sm
+const switchToTabAndHighlight = (platform: string, providerName: string) => {
+  // 切换到对应的 Tab
+  const tabIndex = tabs.findIndex(tab => tab.id === platform)
+  if (tabIndex >= 0 && selectedIndex.value !== tabIndex) {
+    selectedIndex.value = tabIndex
+  }
+
+  // 更新最后使用的供应商
+  lastUsedProviders[platform] = {
+    platform,
+    provider_name: providerName,
+    updated_at: Date.now(),
+  }
+
+  // 高亮闪烁供应商卡片
+  highlightedProvider.value = providerName
+
+  // 清除之前的高亮计时器
+  if (highlightTimer) {
+    clearTimeout(highlightTimer)
+  }
+
+  // 3 秒后取消高亮
+  highlightTimer = window.setTimeout(() => {
+    highlightedProvider.value = null
+  }, 3000)
+
+  // 刷新黑名单状态
+  void loadBlacklistStatus(platform as ProviderTab)
+}
+
+// 处理供应商切换事件
+// @author sm
+const handleProviderSwitched = (event: { data: { platform: string; toProvider: string } }) => {
+  const { platform, toProvider } = event.data
+  console.log('[Event] provider:switched', platform, toProvider)
+  switchToTabAndHighlight(platform, toProvider)
+}
+
+// 处理供应商拉黑事件
+// @author sm
+const handleProviderBlacklisted = (event: { data: { platform: string; providerName: string } }) => {
+  const { platform, providerName } = event.data
+  console.log('[Event] provider:blacklisted', platform, providerName)
+  switchToTabAndHighlight(platform, providerName)
+}
+
+// 判断供应商是否是最后使用的
+// @author sm
+const isLastUsedProvider = (providerName: string): boolean => {
+  const lastUsed = lastUsedProviders[activeTab.value]
+  return lastUsed?.provider_name === providerName
+}
+
+// 滚动到指定卡片
+// @author sm
+const scrollToCard = (el: HTMLElement | null) => {
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+}
+
+// 事件取消订阅函数
+let unsubscribeSwitched: (() => void) | undefined
+let unsubscribeBlacklisted: (() => void) | undefined
+
 onMounted(async () => {
   void loadUsageHeatmap()
   await loadProvidersFromDisk()
@@ -1531,6 +1642,13 @@ onMounted(async () => {
   ;(window as any).__handleWindowFocus = handleWindowFocus
 
   window.addEventListener('app-settings-updated', handleAppSettingsUpdated)
+
+  // 加载最后使用的供应商
+  await loadLastUsedProviders()
+
+  // 监听供应商切换和拉黑事件
+  unsubscribeSwitched = Events.On('provider:switched', handleProviderSwitched as Events.Callback)
+  unsubscribeBlacklisted = Events.On('provider:blacklisted', handleProviderBlacklisted as Events.Callback)
 })
 
 onUnmounted(() => {
@@ -1547,6 +1665,19 @@ onUnmounted(() => {
   }
   if ((window as any).__handleWindowFocus) {
     window.removeEventListener('focus', (window as any).__handleWindowFocus)
+  }
+
+  // 清理高亮计时器
+  if (highlightTimer) {
+    clearTimeout(highlightTimer)
+  }
+
+  // 取消事件订阅
+  if (unsubscribeSwitched) {
+    unsubscribeSwitched()
+  }
+  if (unsubscribeBlacklisted) {
+    unsubscribeBlacklisted()
   }
 })
 
@@ -1961,6 +2092,60 @@ const handleImportClick = async () => {
 </script>
 
 <style scoped>
+/* 正在使用的供应商卡片样式 */
+/* @author sm */
+.automation-card.is-last-used {
+  position: relative;
+  border: 2px solid rgb(16, 185, 129);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.3);
+}
+
+/* 正在使用标签 */
+.last-used-badge {
+  position: absolute;
+  top: -10px;
+  right: 12px;
+  background: rgb(16, 185, 129);
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  z-index: 1;
+}
+
+/* 高亮闪烁的供应商卡片（切换/拉黑时） */
+.automation-card.is-highlighted {
+  animation: highlight-pulse 0.6s ease-in-out 3;
+  border-color: rgb(245, 158, 11);
+  box-shadow: 0 0 12px rgba(245, 158, 11, 0.5);
+}
+
+@keyframes highlight-pulse {
+  0%, 100% {
+    box-shadow: 0 0 8px rgba(245, 158, 11, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(245, 158, 11, 0.7);
+  }
+}
+
+/* 暗色模式适配 */
+:global(.dark) .automation-card.is-last-used {
+  border-color: rgb(52, 211, 153);
+  box-shadow: 0 0 8px rgba(52, 211, 153, 0.3);
+}
+
+:global(.dark) .last-used-badge {
+  background: rgb(52, 211, 153);
+  color: rgb(6, 78, 59);
+}
+
+:global(.dark) .automation-card.is-highlighted {
+  border-color: rgb(251, 191, 36);
+  box-shadow: 0 0 12px rgba(251, 191, 36, 0.5);
+}
+
 .global-actions .ghost-icon svg.rotating {
   animation: import-spin 0.9s linear infinite;
 }

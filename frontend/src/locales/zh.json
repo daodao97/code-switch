@@ -179,7 +179,8 @@
         "cost": "花费",
         "successRate": "成功率",
         "loading": "刷新中...",
-        "noData": "今日暂无数据"
+        "noData": "今日暂无数据",
+        "lastUsed": "正在使用"
       },
       "form": {
         "createTitle": "新增供应商",

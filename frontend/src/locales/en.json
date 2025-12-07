@@ -178,7 +178,8 @@
         "cost": "Cost",
         "successRate": "Success rate",
         "loading": "Refreshing...",
-        "noData": "No data yet today"
+        "noData": "No data yet today",
+        "lastUsed": "In Use"
       },
       "form": {
         "createTitle": "Add vendor",
