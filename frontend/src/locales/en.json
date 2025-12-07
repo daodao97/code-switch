@@ -95,9 +95,9 @@
       },
       "modelMapping": {
         "label": "Model Mapping",
-        "tooltip": "Map external model names to provider-specific names. Supports wildcard expansion",
-        "keyPlaceholder": "External model (e.g., claude-*)",
-        "valuePlaceholder": "Internal model (e.g., anthropic/claude-*)",
+        "tooltip": "Map CLI requested model names to provider-specific names. Supports wildcard expansion",
+        "keyPlaceholder": "CLI model (e.g., claude-*)",
+        "valuePlaceholder": "Provider model (e.g., kimi-k2-thinking)",
         "add": "Add",
         "remove": "Remove mapping",
         "examples": {
@@ -213,7 +213,8 @@
         "confirmDeleteMessage": "Are you sure you want to remove {name}? This action cannot be undone.",
         "errors": {
           "invalidUrl": "Please enter a valid API URL"
-        }
+        },
+        "saveFailed": "Failed to save provider configuration"
       },
       "levelDesc": {
         "highest": "Highest Priority",

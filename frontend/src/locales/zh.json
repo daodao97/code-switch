@@ -96,9 +96,9 @@
       },
       "modelMapping": {
         "label": "模型映射",
-        "tooltip": "将外部模型名称映射到供应商内部模型名称。支持通配符展开",
-        "keyPlaceholder": "外部模型名（如 claude-*）",
-        "valuePlaceholder": "内部模型名（如 anthropic/claude-*）",
+        "tooltip": "将 CLI 请求的模型名映射到供应商实际支持的模型名。支持通配符展开",
+        "keyPlaceholder": "CLI 模型（如 claude-*）",
+        "valuePlaceholder": "供应商模型（如 kimi-k2-thinking）",
         "add": "添加",
         "remove": "删除映射",
         "examples": {
@@ -214,7 +214,8 @@
         "confirmDeleteMessage": "确认删除 {name} 吗？操作不可撤销",
         "errors": {
           "invalidUrl": "请输入合法的 API 地址"
-        }
+        },
+        "saveFailed": "保存供应商配置失败"
       },
       "levelDesc": {
         "highest": "最高优先级",
