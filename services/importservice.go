@@ -8,11 +8,48 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
 )
+
+// stringMap 是一个宽容的 map[string]string 类型
+// 在 JSON 反序列化时自动将数字、布尔等类型转为字符串
+// 用于兼容旧版 cc-switch 配置中 env 值为数字的情况
+type stringMap map[string]string
+
+func (m *stringMap) UnmarshalJSON(data []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	out := make(map[string]string, len(raw))
+	for k, v := range raw {
+		switch t := v.(type) {
+		case string:
+			out[k] = t
+		case float64:
+			// JSON 中所有数字都是 float64，智能格式化（整数不带小数点）
+			if t == float64(int64(t)) {
+				out[k] = strconv.FormatInt(int64(t), 10)
+			} else {
+				out[k] = strconv.FormatFloat(t, 'f', -1, 64)
+			}
+		case bool:
+			out[k] = strconv.FormatBool(t)
+		case nil:
+			out[k] = ""
+		default:
+			// 其他复杂类型转为 JSON 字符串
+			b, _ := json.Marshal(t)
+			out[k] = string(b)
+		}
+	}
+	*m = out
+	return nil
+}
 
 type ConfigImportStatus struct {
 	ConfigExists         bool   `json:"config_exists"`
@@ -256,9 +293,9 @@ type ccProviderEntry struct {
 }
 
 type ccProviderSetting struct {
-	Env    map[string]string `json:"env"`
-	Auth   map[string]string `json:"auth"`
-	Config string            `json:"config"`
+	Env    stringMap `json:"env"`  // 使用 stringMap 兼容旧配置中数字类型的值
+	Auth   stringMap `json:"auth"` // 使用 stringMap 兼容旧配置中数字类型的值
+	Config string    `json:"config"`
 }
 
 type ccMCPSection struct {
@@ -280,11 +317,11 @@ type ccMCPServerEntry struct {
 }
 
 type ccMCPServerConfig struct {
-	Type    string            `json:"type"`
-	Command string            `json:"command"`
-	Args    []string          `json:"args"`
-	Env     map[string]string `json:"env"`
-	URL     string            `json:"url"`
+	Type    string    `json:"type"`
+	Command string    `json:"command"`
+	Args    []string  `json:"args"`
+	Env     stringMap `json:"env"` // 使用 stringMap 兼容旧配置中数字类型的值
+	URL     string    `json:"url"`
 }
 
 type providerCandidate struct {
@@ -686,7 +723,7 @@ func cloneStringSlice(values []string) []string {
 	return out
 }
 
-func cloneStringMap(values map[string]string) map[string]string {
+func cloneStringMap(values stringMap) map[string]string {
 	if len(values) == 0 {
 		return nil
 	}

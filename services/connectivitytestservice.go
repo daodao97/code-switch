@@ -112,8 +112,11 @@ func (cts *ConnectivityTestService) TestProvider(ctx context.Context, provider P
 		return result
 	}
 
+	// 根据平台拼接正确的端点路径（与 providerrelay.go 保持一致）
+	targetURL := cts.buildTargetURL(provider.APIURL, platform)
+
 	// 创建 HTTP 请求
-	req, err := http.NewRequestWithContext(ctx, "POST", provider.APIURL, bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(reqBody))
 	if err != nil {
 		result.Message = fmt.Sprintf("创建请求失败: %v", err)
 		result.SubStatus = SubStatusNetworkError
@@ -326,6 +329,25 @@ func (cts *ConnectivityTestService) truncateMessage(msg string) string {
 		return msg[:512] + "..."
 	}
 	return msg
+}
+
+// buildTargetURL 根据平台拼接正确的 API 端点路径
+// 与 providerrelay.go 中的转发路径保持一致
+func (cts *ConnectivityTestService) buildTargetURL(baseURL, platform string) string {
+	baseURL = strings.TrimSuffix(baseURL, "/")
+
+	switch strings.ToLower(platform) {
+	case "claude":
+		return baseURL + "/v1/messages"
+	case "codex":
+		return baseURL + "/responses"
+	case "gemini":
+		// Gemini 使用不同的路径格式，暂不支持
+		return baseURL
+	default:
+		// 默认使用 OpenAI 格式
+		return baseURL + "/v1/chat/completions"
+	}
 }
 
 // isTimeoutError 检测错误是否为超时类型
