@@ -112,9 +112,8 @@ func (cts *ConnectivityTestService) TestProvider(ctx context.Context, provider P
 		return result
 	}
 
-	// 根据平台和 API 格式拼接正确的端点路径
-	apiFormat := cts.getEffectiveApiFormat(&provider, platform)
-	targetURL := cts.buildTargetURLWithFormat(provider.APIURL, platform, apiFormat)
+	// 根据用户配置的端点拼接目标 URL
+	targetURL := cts.buildTargetURL(&provider, platform)
 
 	// 创建 HTTP 请求
 	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(reqBody))
@@ -127,8 +126,11 @@ func (cts *ConnectivityTestService) TestProvider(ctx context.Context, provider P
 	// 设置 Headers
 	req.Header.Set("Content-Type", "application/json")
 	if provider.APIKey != "" {
-		// 根据 apiFormat 决定认证方式（apiFormat 已在上面定义）
-		if apiFormat == "anthropic" {
+		authType := strings.ToLower(strings.TrimSpace(provider.ConnectivityAuthType))
+		if authType == "" {
+			authType = "x-api-key" // 默认
+		}
+		if authType == "x-api-key" {
 			req.Header.Set("x-api-key", provider.APIKey)
 			req.Header.Set("anthropic-version", "2023-06-01")
 		} else {
@@ -183,10 +185,8 @@ func (cts *ConnectivityTestService) TestProvider(ctx context.Context, provider P
 	return result
 }
 
-// buildTestRequest 根据平台和 API 格式构建测试请求体
+// buildTestRequest 根据端点构建测试请求体
 func (cts *ConnectivityTestService) buildTestRequest(platform string, provider *Provider) ([]byte, string) {
-	var contentField string
-
 	// 平台默认模型
 	platformKey := strings.ToLower(platform)
 	defaults := map[string]string{
@@ -195,35 +195,19 @@ func (cts *ConnectivityTestService) buildTestRequest(platform string, provider *
 		"gemini": "gemini-2.5-flash",
 	}
 
-	// 优先使用用户配置的测试模型
 	model := strings.TrimSpace(provider.ConnectivityTestModel)
 	if model == "" {
 		model = defaults[platformKey]
 	}
 	if model == "" {
-		model = "gpt-3.5-turbo" // 兜底
+		model = "gpt-3.5-turbo"
 	}
 
-	// 获取有效的 API 格式
-	apiFormat := cts.getEffectiveApiFormat(provider, platform)
+	// 根据端点判断请求格式
+	endpoint := strings.ToLower(strings.TrimSpace(provider.ConnectivityTestEndpoint))
 
-	switch platformKey {
-	case "claude":
-		if apiFormat == "openai" {
-			// OpenAI 兼容格式
-			contentField = "choices"
-			reqBody := map[string]interface{}{
-				"model":      model,
-				"max_tokens": 1,
-				"messages": []map[string]string{
-					{"role": "user", "content": "hi"},
-				},
-			}
-			data, _ := json.Marshal(reqBody)
-			return data, contentField
-		}
-		// Anthropic 原生格式
-		contentField = "content"
+	// Anthropic 格式: /v1/messages
+	if strings.Contains(endpoint, "/messages") {
 		reqBody := map[string]interface{}{
 			"model":      model,
 			"max_tokens": 1,
@@ -232,47 +216,32 @@ func (cts *ConnectivityTestService) buildTestRequest(platform string, provider *
 			},
 		}
 		data, _ := json.Marshal(reqBody)
-		return data, contentField
-
-	case "codex":
-		contentField = "choices"
-		reqBody := map[string]interface{}{
-			"model":      model,
-			"max_tokens": 1,
-			"messages": []map[string]string{
-				{"role": "user", "content": "hi"},
-			},
-		}
-		data, _ := json.Marshal(reqBody)
-		return data, contentField
-
-	case "gemini":
-		contentField = "candidates"
-		reqBody := map[string]interface{}{
-			"model": model,
-			"contents": []map[string]interface{}{
-				{
-					"parts": []map[string]string{
-						{"text": "hi"},
-					},
-				},
-			},
-		}
-		data, _ := json.Marshal(reqBody)
-		return data, contentField
-
-	default:
-		contentField = "choices"
-		reqBody := map[string]interface{}{
-			"model":      model,
-			"max_tokens": 1,
-			"messages": []map[string]string{
-				{"role": "user", "content": "hi"},
-			},
-		}
-		data, _ := json.Marshal(reqBody)
-		return data, contentField
+		return data, "content"
 	}
+
+	// Codex 格式: /responses
+	if strings.Contains(endpoint, "/responses") {
+		reqBody := map[string]interface{}{
+			"model":      model,
+			"max_tokens": 1,
+			"messages": []map[string]string{
+				{"role": "user", "content": "hi"},
+			},
+		}
+		data, _ := json.Marshal(reqBody)
+		return data, "choices"
+	}
+
+	// 默认 OpenAI 格式: /v1/chat/completions
+	reqBody := map[string]interface{}{
+		"model":      model,
+		"max_tokens": 1,
+		"messages": []map[string]string{
+			{"role": "user", "content": "hi"},
+		},
+	}
+	data, _ := json.Marshal(reqBody)
+	return data, "choices"
 }
 
 // determineStatus 根据 HTTP 状态码和延迟判定状态
@@ -340,55 +309,25 @@ func (cts *ConnectivityTestService) truncateMessage(msg string) string {
 	return msg
 }
 
-// getEffectiveApiFormat 获取有效的 API 格式
-// 优先使用用户配置，否则根据平台和 URL 自动判断
-func (cts *ConnectivityTestService) getEffectiveApiFormat(provider *Provider, platform string) string {
-	// 用户显式配置优先
-	if provider.ApiFormat != "" {
-		return strings.ToLower(provider.ApiFormat)
-	}
+// buildTargetURL 根据用户配置的端点构建目标 URL
+func (cts *ConnectivityTestService) buildTargetURL(provider *Provider, platform string) string {
+	baseURL := strings.TrimSuffix(provider.APIURL, "/")
 
-	// 官方 Anthropic API 使用 anthropic 格式
-	if strings.Contains(strings.ToLower(provider.APIURL), "anthropic.com") {
-		return "anthropic"
-	}
-
-	// 其他第三方供应商默认使用 openai 格式（更通用）
-	return "openai"
-}
-
-// buildTargetURL 根据平台和 API 格式拼接正确的端点路径
-func (cts *ConnectivityTestService) buildTargetURL(baseURL, platform string) string {
-	baseURL = strings.TrimSuffix(baseURL, "/")
-
-	switch strings.ToLower(platform) {
-	case "claude":
-		// Claude 平台的路径由 apiFormat 决定，这里返回基础路径
-		// 实际路径在 buildTargetURLWithFormat 中处理
-		return baseURL + "/v1/messages"
-	case "codex":
-		return baseURL + "/responses"
-	case "gemini":
-		return baseURL
-	default:
-		return baseURL + "/v1/chat/completions"
-	}
-}
-
-// buildTargetURLWithFormat 根据 API 格式构建目标 URL
-func (cts *ConnectivityTestService) buildTargetURLWithFormat(baseURL, platform, apiFormat string) string {
-	baseURL = strings.TrimSuffix(baseURL, "/")
-
-	switch strings.ToLower(platform) {
-	case "claude":
-		if apiFormat == "openai" {
-			return baseURL + "/v1/chat/completions"
+	// 优先使用用户配置的端点
+	endpoint := strings.TrimSpace(provider.ConnectivityTestEndpoint)
+	if endpoint != "" {
+		if !strings.HasPrefix(endpoint, "/") {
+			endpoint = "/" + endpoint
 		}
+		return baseURL + endpoint
+	}
+
+	// 默认端点（按平台）
+	switch strings.ToLower(platform) {
+	case "claude":
 		return baseURL + "/v1/messages"
 	case "codex":
 		return baseURL + "/responses"
-	case "gemini":
-		return baseURL
 	default:
 		return baseURL + "/v1/chat/completions"
 	}
@@ -660,4 +599,42 @@ func (cts *ConnectivityTestService) Stop() error {
 		cts.running = false
 	}
 	return nil
+}
+
+// ManualTestResult 手动测试结果
+type ManualTestResult struct {
+	Success   bool   `json:"success"`
+	LatencyMs int    `json:"latencyMs"`
+	HTTPCode  int    `json:"httpCode"`
+	Message   string `json:"message"`
+}
+
+// TestProviderManual 手动测试供应商连通性（供前端测试按钮调用）
+func (cts *ConnectivityTestService) TestProviderManual(
+	apiURL string,
+	apiKey string,
+	model string,
+	endpoint string,
+	authType string,
+) ManualTestResult {
+	// 构建临时 Provider
+	provider := Provider{
+		APIURL:                   apiURL,
+		APIKey:                   apiKey,
+		ConnectivityTestModel:    model,
+		ConnectivityTestEndpoint: endpoint,
+		ConnectivityAuthType:     authType,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	result := cts.TestProvider(ctx, provider, "claude")
+
+	return ManualTestResult{
+		Success:   result.Status == StatusAvailable || result.Status == StatusDegraded,
+		LatencyMs: result.LatencyMs,
+		HTTPCode:  result.HTTPCode,
+		Message:   result.Message,
+	}
 }

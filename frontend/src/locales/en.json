@@ -194,7 +194,8 @@
           "level": "Priority Level",
           "connectivityCheck": "Connectivity Check",
           "connectivityTestModel": "Test Model",
-          "apiFormat": "API Format"
+          "connectivityTestEndpoint": "Test Endpoint",
+          "connectivityAuthType": "Auth Method"
         },
         "placeholders": {
           "name": "e.g. AICoding.sh",
@@ -204,18 +205,26 @@
           "icon": "e.g. aicoding, kimi",
           "connectivityTestModel": "Select or use default",
           "customModel": "Or enter custom model",
-          "apiFormat": "Auto detect"
+          "customEndpoint": "Or enter custom endpoint"
         },
         "hints": {
           "level": "Lower numbers = higher priority. Level 1 providers are tried first, then Level 2, etc.",
           "connectivityCheck": "When enabled, connectivity to this provider will be tested periodically; enabling this may consume a small amount of tokens",
           "connectivityTestModel": "Select a model for connectivity testing, or leave empty to use platform default",
-          "apiFormat": "Most third-party providers use OpenAI format, official Anthropic uses Anthropic format"
+          "connectivityTestEndpoint": "Select or enter API endpoint path",
+          "connectivityAuthType": "Select API authentication method"
         },
         "actions": {
           "cancel": "Cancel",
           "save": "Save",
-          "delete": "Delete"
+          "delete": "Delete",
+          "testConnectivity": "Test Connectivity",
+          "testing": "Testing..."
+        },
+        "connectivity": {
+          "success": "Connected (latency: {latency}ms)",
+          "failed": "Connection failed",
+          "error": "Test error: {error}"
         },
         "switch": {
           "on": "Active",

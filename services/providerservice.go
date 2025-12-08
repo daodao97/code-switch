@@ -38,9 +38,11 @@ type Provider struct {
 	// 连通性检测模型 - 用户可选择或自定义测试模型
 	ConnectivityTestModel string `json:"connectivityTestModel,omitempty"`
 
-	// API 格式 - anthropic 或 openai（默认根据平台自动选择）
-	// 某些第三方供应商使用 OpenAI 兼容 API 而非原生 Anthropic API
-	ApiFormat string `json:"apiFormat,omitempty"`
+	// 连通性检测端点 - 用户可选择或自定义（如 /v1/messages, /v1/chat/completions）
+	ConnectivityTestEndpoint string `json:"connectivityTestEndpoint,omitempty"`
+
+	// 连通性检测认证方式 - x-api-key 或 bearer
+	ConnectivityAuthType string `json:"connectivityAuthType,omitempty"`
 
 	// 内部字段：配置验证错误（不持久化）
 	configErrors []string `json:"-"`

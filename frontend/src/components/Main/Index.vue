@@ -625,14 +625,48 @@
                   <span class="field-hint">{{ t('components.main.form.hints.connectivityTestModel') }}</span>
                 </div>
 
+                <!-- 测试端点 -->
                 <div v-if="modalState.form.connectivityCheck" class="form-field">
-                  <span>{{ t('components.main.form.labels.apiFormat') }}</span>
-                  <select v-model="modalState.form.apiFormat" class="model-select">
-                    <option value="">{{ t('components.main.form.placeholders.apiFormat') }}</option>
-                    <option value="anthropic">Anthropic (x-api-key)</option>
-                    <option value="openai">OpenAI (Bearer)</option>
+                  <span>{{ t('components.main.form.labels.connectivityTestEndpoint') }}</span>
+                  <div class="model-select-combo">
+                    <select v-model="modalState.form.connectivityTestEndpoint" class="model-select">
+                      <option v-for="opt in connectivityEndpointOptions" :key="opt.value" :value="opt.value">
+                        {{ opt.label }}
+                      </option>
+                    </select>
+                    <BaseInput
+                      v-model="modalState.form.connectivityTestEndpoint"
+                      :placeholder="t('components.main.form.placeholders.customEndpoint')"
+                      class="model-input"
+                    />
+                  </div>
+                  <span class="field-hint">{{ t('components.main.form.hints.connectivityTestEndpoint') }}</span>
+                </div>
+
+                <!-- 认证方式 -->
+                <div v-if="modalState.form.connectivityCheck" class="form-field">
+                  <span>{{ t('components.main.form.labels.connectivityAuthType') }}</span>
+                  <select v-model="modalState.form.connectivityAuthType" class="model-select">
+                    <option value="x-api-key">x-api-key (Anthropic)</option>
+                    <option value="bearer">Authorization: Bearer (OpenAI)</option>
                   </select>
-                  <span class="field-hint">{{ t('components.main.form.hints.apiFormat') }}</span>
+                  <span class="field-hint">{{ t('components.main.form.hints.connectivityAuthType') }}</span>
+                </div>
+
+                <!-- 测试按钮 -->
+                <div v-if="modalState.form.connectivityCheck" class="form-field">
+                  <button
+                    type="button"
+                    class="test-connectivity-btn"
+                    :disabled="testingConnectivity || !modalState.form.apiUrl || !modalState.form.apiKey"
+                    @click="handleTestConnectivity"
+                  >
+                    <span v-if="testingConnectivity" class="btn-spinner"></span>
+                    <span>{{ testingConnectivity ? t('components.main.form.actions.testing') : t('components.main.form.actions.testConnectivity') }}</span>
+                  </button>
+                  <div v-if="connectivityTestResult" class="test-result" :class="connectivityTestResult.success ? 'success' : 'error'">
+                    {{ connectivityTestResult.message }}
+                  </div>
                 </div>
 
                 <footer class="form-actions">
@@ -1730,6 +1764,48 @@ const connectivityTestModelOptions = computed(() => {
   return options[modalState.tabId] || options.claude
 })
 
+// 连通性测试端点选项
+const connectivityEndpointOptions = [
+  { value: '/v1/messages', label: '/v1/messages (Anthropic)' },
+  { value: '/v1/chat/completions', label: '/v1/chat/completions (OpenAI)' },
+  { value: '/responses', label: '/responses (Codex)' },
+]
+
+// 连通性测试状态
+const testingConnectivity = ref(false)
+const connectivityTestResult = ref<{ success: boolean; message: string } | null>(null)
+
+// 手动测试连通性
+const handleTestConnectivity = async () => {
+  testingConnectivity.value = true
+  connectivityTestResult.value = null
+
+  try {
+    const result = await Call.ByName(
+      'codeswitch/services.ConnectivityTestService.TestProviderManual',
+      modalState.form.apiUrl,
+      modalState.form.apiKey,
+      modalState.form.connectivityTestModel || '',
+      modalState.form.connectivityTestEndpoint || '/v1/messages',
+      modalState.form.connectivityAuthType || 'x-api-key'
+    )
+
+    connectivityTestResult.value = {
+      success: result.success,
+      message: result.success
+        ? t('components.main.form.connectivity.success', { latency: result.latencyMs })
+        : result.message || t('components.main.form.connectivity.failed')
+    }
+  } catch (error) {
+    connectivityTestResult.value = {
+      success: false,
+      message: t('components.main.form.connectivity.error', { error: String(error) })
+    }
+  } finally {
+    testingConnectivity.value = false
+  }
+}
+
 // 监听 tab 切换，立即刷新黑名单和连通性状态
 watch(activeTab, (newTab) => {
   void loadBlacklistStatus(newTab)
@@ -1809,7 +1885,8 @@ type VendorForm = {
   cliConfig?: Record<string, any>
   connectivityCheck?: boolean
   connectivityTestModel?: string
-  apiFormat?: string
+  connectivityTestEndpoint?: string
+  connectivityAuthType?: string
 }
 
 const iconOptions = Object.keys(lobeIcons).sort((a, b) => a.localeCompare(b))
@@ -1828,7 +1905,8 @@ const defaultFormValues = (): VendorForm => ({
   cliConfig: {},
   connectivityCheck: false,
   connectivityTestModel: '',
-  apiFormat: '',
+  connectivityTestEndpoint: '/v1/messages',
+  connectivityAuthType: 'x-api-key',
 })
 
 // Level 描述文本映射（1-10）
@@ -1908,8 +1986,10 @@ const openEditModal = (card: AutomationCard) => {
     cliConfig: card.cliConfig || {},
     connectivityCheck: card.connectivityCheck || false,
     connectivityTestModel: card.connectivityTestModel || '',
-    apiFormat: card.apiFormat || '',
+    connectivityTestEndpoint: card.connectivityTestEndpoint || '/v1/messages',
+    connectivityAuthType: card.connectivityAuthType || 'x-api-key',
   })
+  connectivityTestResult.value = null
   modalState.errors.apiUrl = ''
   modalState.open = true
 }
@@ -1956,7 +2036,8 @@ const submitModal = async () => {
       cliConfig: modalState.form.cliConfig || {},
       connectivityCheck: modalState.form.connectivityCheck || false,
       connectivityTestModel: modalState.form.connectivityTestModel || '',
-      apiFormat: modalState.form.apiFormat || '',
+      connectivityTestEndpoint: modalState.form.connectivityTestEndpoint || '/v1/messages',
+      connectivityAuthType: modalState.form.connectivityAuthType || 'x-api-key',
     })
     if (prevLevel !== nextLevel) {
       sortProvidersByLevel(list)
@@ -1979,7 +2060,8 @@ const submitModal = async () => {
       cliConfig: modalState.form.cliConfig || {},
       connectivityCheck: modalState.form.connectivityCheck || false,
       connectivityTestModel: modalState.form.connectivityTestModel || '',
-      apiFormat: modalState.form.apiFormat || '',
+      connectivityTestEndpoint: modalState.form.connectivityTestEndpoint || '/v1/messages',
+      connectivityAuthType: modalState.form.connectivityAuthType || 'x-api-key',
     }
     list.push(newCard)
     sortProvidersByLevel(list)
@@ -2811,5 +2893,74 @@ const handleImportClick = async () => {
 
 :global(.dark) .connectivity-dot.connectivity-gray {
   background-color: #6b7280;
+}
+
+/* 测试连通性按钮 */
+.test-connectivity-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 16px;
+  background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.test-connectivity-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.test-connectivity-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.test-result {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.test-result.success {
+  background: rgba(34, 197, 94, 0.1);
+  color: #16a34a;
+  border-left: 3px solid #22c55e;
+}
+
+.test-result.error {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+  border-left: 3px solid #ef4444;
+}
+
+:global(.dark) .test-result.success {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+}
+
+:global(.dark) .test-result.error {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
 }
 </style>

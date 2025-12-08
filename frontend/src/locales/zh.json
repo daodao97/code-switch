@@ -195,7 +195,8 @@
           "level": "优先级分组",
           "connectivityCheck": "连通性检测",
           "connectivityTestModel": "测试模型",
-          "apiFormat": "API 格式"
+          "connectivityTestEndpoint": "测试端点",
+          "connectivityAuthType": "认证方式"
         },
         "placeholders": {
           "name": "例如：AICoding.sh",
@@ -205,18 +206,26 @@
           "icon": "例如：aicoding、kimi",
           "connectivityTestModel": "选择或使用默认",
           "customModel": "或输入自定义模型",
-          "apiFormat": "自动检测"
+          "customEndpoint": "或输入自定义端点"
         },
         "hints": {
           "level": "数字越小优先级越高，Level 1 会被优先尝试，失败后依次尝试 Level 2、Level 3 等",
           "connectivityCheck": "启用后会定期检测此供应商的连通性，开启该选项可能会消耗少量 tokens",
           "connectivityTestModel": "选择用于连通性测试的模型，留空则使用平台默认模型",
-          "apiFormat": "大多数第三方供应商使用 OpenAI 格式，官方 Anthropic 使用 Anthropic 格式"
+          "connectivityTestEndpoint": "选择或输入 API 端点路径",
+          "connectivityAuthType": "选择 API 认证方式"
         },
         "actions": {
           "cancel": "取消",
           "save": "保存",
-          "delete": "删除"
+          "delete": "删除",
+          "testConnectivity": "测试连通性",
+          "testing": "测试中..."
+        },
+        "connectivity": {
+          "success": "连接成功（延迟: {latency}ms）",
+          "failed": "连接失败",
+          "error": "测试出错: {error}"
         },
         "switch": {
           "on": "已启用",
