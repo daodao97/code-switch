@@ -690,10 +690,16 @@
       "templateSaved": "Template saved successfully",
       "templateSaveError": "Failed to save template",
       "jsonParseError": "Invalid JSON format, please check your input",
-      "previewTitle": "Config preview (read-only)",
+      "previewTitle": "Config preview",
       "previewUnknownPath": "Unknown path",
       "smartPasteSuccess": "Parsed {format} config and filled fields",
-      "smartPasteFailed": "Unrecognized paste, please use JSON / TOML / .env content"
+      "smartPasteFailed": "Unrecognized paste, please use JSON / TOML / .env content",
+      "previewEditLocked": "Read-only",
+      "previewEditUnlocked": "Unlocked",
+      "previewApply": "Apply",
+      "previewReset": "Reset",
+      "previewParseError": "Invalid config format, please check syntax",
+      "previewApplySuccess": "Config applied successfully"
     }
   }
 }

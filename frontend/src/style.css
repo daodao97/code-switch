@@ -538,11 +538,9 @@ html.dark .mac-sidebar-item:hover {
   position: relative;
 }
 
-/* 左侧占位符，用于居中 tab-group */
+/* 移除左侧占位符，使 tab-group 左对齐 */
 .section-header::before {
-  content: '';
-  flex: 1;
-  min-width: 0;
+  content: none;
 }
 
 .tab-group {

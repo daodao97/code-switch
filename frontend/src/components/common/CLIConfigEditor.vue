@@ -217,14 +217,56 @@
             <span class="preview-icon">👁️</span>
             <span>{{ t('components.cliConfig.previewTitle') }}</span>
             <span class="cli-preview-count">{{ previewFiles.length }}</span>
+            <button
+              v-if="previewExpanded"
+              type="button"
+              class="cli-action-btn cli-preview-lock"
+              @click.stop="togglePreviewEditable"
+            >
+              <span v-if="previewEditable">🔓 {{ t('components.cliConfig.previewEditUnlocked') }}</span>
+              <span v-else>🔒 {{ t('components.cliConfig.previewEditLocked') }}</span>
+            </button>
           </div>
           <div v-if="previewExpanded" class="cli-preview-list">
-            <div v-for="file in previewFiles" :key="file.path || file.format" class="cli-preview-card">
+            <div
+              v-for="(file, index) in previewFiles"
+              :key="getPreviewKey(file, index)"
+              class="cli-preview-card"
+            >
               <div class="cli-preview-meta">
                 <span class="cli-preview-name">{{ file.path || t('components.cliConfig.previewUnknownPath') }}</span>
                 <span class="cli-preview-format">{{ (file.format || config?.configFormat || '').toUpperCase() }}</span>
               </div>
-              <pre class="cli-preview-content">{{ file.content }}</pre>
+              <template v-if="previewEditable">
+                <textarea
+                  v-model="editingContent[getPreviewKey(file, index)]"
+                  class="cli-preview-textarea"
+                  rows="8"
+                />
+                <div class="cli-preview-actions">
+                  <button
+                    type="button"
+                    class="cli-action-btn cli-primary-btn"
+                    @click="handleApplyPreviewEdit(file, index)"
+                  >
+                    {{ t('components.cliConfig.previewApply') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="cli-action-btn"
+                    @click="handleResetPreviewEdit(file, index)"
+                  >
+                    {{ t('components.cliConfig.previewReset') }}
+                  </button>
+                </div>
+                <div
+                  v-if="previewErrors[getPreviewKey(file, index)]"
+                  class="cli-preview-error"
+                >
+                  {{ previewErrors[getPreviewKey(file, index)] }}
+                </div>
+              </template>
+              <pre v-else class="cli-preview-content">{{ file.content }}</pre>
             </div>
           </div>
         </div>
@@ -270,6 +312,9 @@ const editableValues = ref<Record<string, any>>({})
 const isGlobalTemplate = ref(false)
 const customFields = ref<Array<{ key: string; value: string }>>([])
 const previewExpanded = ref(false)
+const previewEditable = ref(false)
+const editingContent = ref<Record<string, string>>({})
+const previewErrors = ref<Record<string, string>>({})
 
 // 获取所有预置字段的 key（包括锁定和可编辑）
 const presetFieldKeys = computed(() => {
@@ -361,6 +406,8 @@ const loadConfig = async () => {
 
     // 提取自定义字段（在预置字段列表加载后）
     extractCustomFields()
+    // 初始化预览可编辑内容
+    initPreviewEditing()
   } catch (error) {
     console.error('Failed to load CLI config:', error)
     config.value = null
@@ -702,6 +749,59 @@ const applyParsedConfig = (data: Record<string, any>) => {
 // 切换预览区展开状态
 const togglePreview = () => {
   previewExpanded.value = !previewExpanded.value
+}
+
+// 切换预览区编辑模式
+const togglePreviewEditable = () => {
+  previewEditable.value = !previewEditable.value
+  if (!previewEditable.value) {
+    // 关闭编辑模式时清理错误
+    previewErrors.value = {}
+  } else if (Object.keys(editingContent.value).length === 0) {
+    // 首次解锁时，如果还没初始化，补一次
+    initPreviewEditing()
+  }
+}
+
+// 生成预览文件的唯一 key
+const getPreviewKey = (file: CLIConfigFile, index: number): string => {
+  // 优先使用 path，否则使用 format-index 组合确保唯一性
+  return file.path || `${file.format || 'file'}-${index}`
+}
+
+// 初始化预览编辑内容
+const initPreviewEditing = () => {
+  const nextContent: Record<string, string> = {}
+  previewFiles.value.forEach((file, index) => {
+    const key = getPreviewKey(file, index)
+    nextContent[key] = file.content || ''
+  })
+  editingContent.value = nextContent
+  previewErrors.value = {}
+}
+
+// 应用预览编辑
+const handleApplyPreviewEdit = (file: CLIConfigFile, index: number) => {
+  const key = getPreviewKey(file, index)
+  const text = editingContent.value[key] ?? file.content ?? ''
+
+  const parsed = parseSmartConfig(text)
+  if (!parsed || Object.keys(parsed.data).length === 0) {
+    previewErrors.value[key] = t('components.cliConfig.previewParseError')
+    showToast(t('components.cliConfig.previewParseError'), 'error')
+    return
+  }
+
+  applyParsedConfig(parsed.data)
+  delete previewErrors.value[key]
+  showToast(t('components.cliConfig.previewApplySuccess'), 'success')
+}
+
+// 还原预览编辑
+const handleResetPreviewEdit = (file: CLIConfigFile, index: number) => {
+  const key = getPreviewKey(file, index)
+  editingContent.value[key] = file.content || ''
+  delete previewErrors.value[key]
 }
 
 // 监听 modelValue 变化
@@ -1156,6 +1256,65 @@ onMounted(() => {
   background: var(--mac-bg);
 }
 
+/* 预览区解锁编辑样式 */
+.cli-preview-lock {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--mac-text-secondary);
+  padding: 4px 8px;
+}
+
+.cli-preview-lock:hover {
+  color: var(--mac-text);
+}
+
+.cli-preview-textarea {
+  width: 100%;
+  min-height: 160px;
+  padding: 12px;
+  border: 1px solid var(--mac-border);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  font-family: monospace;
+  background: var(--mac-bg);
+  color: var(--mac-text);
+  resize: vertical;
+}
+
+.cli-preview-textarea:focus {
+  outline: none;
+  border-color: var(--mac-accent);
+}
+
+.cli-preview-actions {
+  display: flex;
+  gap: 8px;
+  margin: 8px 12px 4px;
+}
+
+.cli-primary-btn {
+  background: var(--mac-accent);
+  color: white;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.cli-primary-btn:hover {
+  opacity: 0.9;
+}
+
+.cli-preview-error {
+  font-size: 12px;
+  color: var(--mac-error, #ff3b30);
+  margin: 4px 12px 8px;
+}
+
 /* 深色模式适配 */
 :global(.dark) .cli-field-input {
   background: var(--mac-surface-strong);
@@ -1167,5 +1326,9 @@ onMounted(() => {
 
 :global(.dark) .cli-field-input.disabled {
   background: var(--mac-bg);
+}
+
+:global(.dark) .cli-preview-textarea {
+  background: var(--mac-surface-strong);
 }
 </style>

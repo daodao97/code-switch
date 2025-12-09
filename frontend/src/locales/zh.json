@@ -691,10 +691,16 @@
       "templateSaved": "模板已保存",
       "templateSaveError": "保存模板失败",
       "jsonParseError": "JSON 格式无效，请检查输入",
-      "previewTitle": "配置文件预览（只读）",
+      "previewTitle": "配置文件预览",
       "previewUnknownPath": "路径未知",
       "smartPasteSuccess": "已识别 {format} 配置并填充字段",
-      "smartPasteFailed": "未识别粘贴内容，请使用 JSON / TOML / .env 格式"
+      "smartPasteFailed": "未识别粘贴内容，请使用 JSON / TOML / .env 格式",
+      "previewEditLocked": "只读",
+      "previewEditUnlocked": "已解锁",
+      "previewApply": "应用",
+      "previewReset": "还原",
+      "previewParseError": "配置格式无效，请检查语法",
+      "previewApplySuccess": "配置已应用"
     }
   }
 }
