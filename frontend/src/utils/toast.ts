@@ -1,4 +1,4 @@
-type ToastType = 'success' | 'error'
+type ToastType = 'success' | 'error' | 'warning'
 
 const TOAST_DURATION = 2400
 

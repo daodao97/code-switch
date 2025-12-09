@@ -292,6 +292,10 @@ html.dark .mac-sidebar-item:hover {
   border-color: rgba(255, 69, 58, 0.5);
 }
 
+.mac-toast-warning {
+  border-color: rgba(245, 158, 11, 0.5);
+}
+
 @media (max-width: 960px) {
   .mac-window {
     flex-direction: column;
