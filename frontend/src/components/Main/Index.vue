@@ -365,7 +365,7 @@
                 <p class="card-title">{{ card.name }}</p>
                 <!-- 连通性状态指示器 -->
                 <span
-                  v-if="card.connectivityCheck"
+                  v-if="card.availabilityMonitorEnabled"
                   class="connectivity-dot"
                   :class="getConnectivityIndicatorClass(card.id)"
                   :title="getConnectivityTooltip(card.id)"
@@ -676,83 +676,70 @@
                   </div>
                 </div>
 
+                <!-- 可用性监控配置 -->
                 <div class="form-field switch-field">
-                  <span>{{ t('components.main.form.labels.connectivityCheck') }}</span>
+                  <span>{{ t('components.main.form.labels.availabilityMonitor') }}</span>
                   <div class="switch-inline">
                     <label class="mac-switch">
-                      <input type="checkbox" v-model="modalState.form.connectivityCheck" />
+                      <input type="checkbox" v-model="modalState.form.availabilityMonitorEnabled" />
                       <span></span>
                     </label>
                     <span class="switch-text">
-                      {{ modalState.form.connectivityCheck ? t('components.main.form.switch.on') : t('components.main.form.switch.off') }}
+                      {{ modalState.form.availabilityMonitorEnabled ? t('components.main.form.switch.on') : t('components.main.form.switch.off') }}
                     </span>
                   </div>
-                  <span class="field-hint">{{ t('components.main.form.hints.connectivityCheck') }}</span>
+                  <span class="field-hint">{{ t('components.main.form.hints.availabilityMonitor') }}</span>
                 </div>
 
-                <div v-if="modalState.form.connectivityCheck" class="form-field">
-                  <span>{{ t('components.main.form.labels.connectivityTestModel') }}</span>
+                <!-- 连通性自动拉黑 -->
+                <div v-if="modalState.form.availabilityMonitorEnabled" class="form-field switch-field">
+                  <span>{{ t('components.main.form.labels.connectivityAutoBlacklist') }}</span>
+                  <div class="switch-inline">
+                    <label class="mac-switch">
+                      <input type="checkbox" v-model="modalState.form.connectivityAutoBlacklist" />
+                      <span></span>
+                    </label>
+                    <span class="switch-text">
+                      {{ modalState.form.connectivityAutoBlacklist ? t('components.main.form.switch.on') : t('components.main.form.switch.off') }}
+                    </span>
+                  </div>
+                  <span class="field-hint">{{ t('components.main.form.hints.connectivityAutoBlacklist') }}</span>
+                </div>
+
+                <!-- 高级配置 -->
+                <div v-if="modalState.form.availabilityMonitorEnabled" class="form-field">
+                  <span>{{ t('components.main.form.labels.availabilityTestModel') }}</span>
                   <div class="model-select-combo">
-                    <select
-                      v-model="modalState.form.connectivityTestModel"
-                      class="model-select"
-                    >
-                      <option value="">{{ t('components.main.form.placeholders.connectivityTestModel') }}</option>
-                      <option v-for="model in connectivityTestModelOptions" :key="model" :value="model">
-                        {{ model }}
-                      </option>
-                    </select>
                     <BaseInput
-                      v-model="modalState.form.connectivityTestModel"
-                      :placeholder="t('components.main.form.placeholders.customModel')"
+                      v-model="modalState.form.availabilityConfig!.testModel"
+                      :placeholder="t('components.main.form.placeholders.availabilityTestModel')"
                       class="model-input"
                     />
                   </div>
-                  <span class="field-hint">{{ t('components.main.form.hints.connectivityTestModel') }}</span>
+                  <span class="field-hint">{{ t('components.main.form.hints.availabilityTestModel') }}</span>
                 </div>
 
-                <!-- 测试端点 -->
-                <div v-if="modalState.form.connectivityCheck" class="form-field">
-                  <span>{{ t('components.main.form.labels.connectivityTestEndpoint') }}</span>
+                <div v-if="modalState.form.availabilityMonitorEnabled" class="form-field">
+                  <span>{{ t('components.main.form.labels.availabilityTestEndpoint') }}</span>
                   <div class="model-select-combo">
-                    <select v-model="modalState.form.connectivityTestEndpoint" class="model-select">
-                      <option v-for="opt in connectivityEndpointOptions" :key="opt.value" :value="opt.value">
-                        {{ opt.label }}
-                      </option>
-                    </select>
                     <BaseInput
-                      v-model="modalState.form.connectivityTestEndpoint"
-                      :placeholder="t('components.main.form.placeholders.customEndpoint')"
+                      v-model="modalState.form.availabilityConfig!.testEndpoint"
+                      :placeholder="t('components.main.form.placeholders.availabilityTestEndpoint')"
                       class="model-input"
                     />
                   </div>
-                  <span class="field-hint">{{ t('components.main.form.hints.connectivityTestEndpoint') }}</span>
+                  <span class="field-hint">{{ t('components.main.form.hints.availabilityTestEndpoint') }}</span>
                 </div>
 
-                <!-- 认证方式 -->
-                <div v-if="modalState.form.connectivityCheck" class="form-field">
-                  <span>{{ t('components.main.form.labels.connectivityAuthType') }}</span>
-                  <select v-model="modalState.form.connectivityAuthType" class="model-select">
-                    <option value="x-api-key">x-api-key (Anthropic)</option>
-                    <option value="bearer">Authorization: Bearer (OpenAI)</option>
-                  </select>
-                  <span class="field-hint">{{ t('components.main.form.hints.connectivityAuthType') }}</span>
-                </div>
-
-                <!-- 测试按钮 -->
-                <div v-if="modalState.form.connectivityCheck" class="form-field">
-                  <button
-                    type="button"
-                    class="test-connectivity-btn"
-                    :disabled="testingConnectivity || !modalState.form.apiUrl || !modalState.form.apiKey"
-                    @click="handleTestConnectivity"
-                  >
-                    <span v-if="testingConnectivity" class="btn-spinner"></span>
-                    <span>{{ testingConnectivity ? t('components.main.form.actions.testing') : t('components.main.form.actions.testConnectivity') }}</span>
-                  </button>
-                  <div v-if="connectivityTestResult" class="test-result" :class="connectivityTestResult.success ? 'success' : 'error'">
-                    {{ connectivityTestResult.message }}
-                  </div>
+                <div v-if="modalState.form.availabilityMonitorEnabled" class="form-field">
+                  <span>{{ t('components.main.form.labels.availabilityTimeout') }}</span>
+                  <BaseInput
+                    v-model.number="modalState.form.availabilityConfig!.timeout"
+                    type="number"
+                    :placeholder="'15000'"
+                    class="model-input"
+                  />
+                  <span class="field-hint">{{ t('components.main.form.hints.availabilityTimeout') }}</span>
                 </div>
 
                 <footer class="form-actions">
@@ -1433,7 +1420,11 @@ const geminiToCard = (provider: GeminiProvider, index: number): AutomationCard =
   tint: 'rgba(251, 146, 60, 0.18)',
   accent: '#fb923c',
   enabled: provider.enabled,
-  level: provider.level || 1, // 保持 Level 字段
+  level: provider.level || 1,
+  // 可用性监控配置（Gemini 暂不支持，使用默认值）
+  availabilityMonitorEnabled: false,
+  connectivityAutoBlacklist: false,
+  availabilityConfig: undefined,
 })
 
 // AutomationCard 到 Gemini Provider 的转换
@@ -1444,10 +1435,29 @@ const cardToGemini = (card: AutomationCard, original: GeminiProvider): GeminiPro
   apiKey: card.apiKey,
   websiteUrl: card.officialSite,
   enabled: card.enabled,
-  level: card.level || 1, // 保持 Level 字段
+  level: card.level || 1,
+  // 注意：Gemini 不支持可用性监控配置，这些字段不会保存
 })
 
-const serializeProviders = (providers: AutomationCard[]) => providers.map((provider) => ({ ...provider }))
+const serializeProviders = (providers: AutomationCard[]) =>
+  providers.map((provider) => ({
+    ...provider,
+    // 确保可用性配置正确序列化
+    availabilityMonitorEnabled: !!provider.availabilityMonitorEnabled,
+    connectivityAutoBlacklist: !!provider.connectivityAutoBlacklist,
+    availabilityConfig: provider.availabilityConfig
+      ? {
+          testModel: provider.availabilityConfig.testModel || '',
+          testEndpoint: provider.availabilityConfig.testEndpoint || '',
+          timeout: provider.availabilityConfig.timeout || 15000,
+        }
+      : undefined,
+    // 清除旧连通性字段（避免再次写入配置文件）
+    connectivityCheck: false,
+    connectivityTestModel: '',
+    connectivityTestEndpoint: '',
+    connectivityAuthType: '',
+  }))
 
 // 生成 custom CLI 工具的 provider kind（后端需要 "custom:{toolId}" 格式）
 const getCustomProviderKind = (toolId: string): string => `custom:${toolId}`
@@ -2300,9 +2310,22 @@ type VendorForm = {
   modelMapping?: Record<string, string>
   level?: number
   cliConfig?: Record<string, any>
+  // === 可用性监控配置（新） ===
+  availabilityMonitorEnabled?: boolean
+  connectivityAutoBlacklist?: boolean
+  availabilityConfig?: {
+    testModel?: string
+    testEndpoint?: string
+    timeout?: number
+  }
+  // === 旧连通性字段（已废弃） ===
+  /** @deprecated */
   connectivityCheck?: boolean
+  /** @deprecated */
   connectivityTestModel?: string
+  /** @deprecated */
   connectivityTestEndpoint?: string
+  /** @deprecated */
   connectivityAuthType?: string
 }
 
@@ -2320,10 +2343,19 @@ const defaultFormValues = (platform?: string): VendorForm => ({
   supportedModels: {},
   modelMapping: {},
   cliConfig: {},
+  // 可用性监控配置（新）
+  availabilityMonitorEnabled: false,
+  connectivityAutoBlacklist: false,
+  availabilityConfig: {
+    testModel: '',
+    testEndpoint: getDefaultEndpoint(platform || 'claude'),
+    timeout: 15000,
+  },
+  // 旧连通性字段（已废弃，置空）
   connectivityCheck: false,
   connectivityTestModel: '',
-  connectivityTestEndpoint: getDefaultEndpoint(platform || 'claude'),
-  connectivityAuthType: getDefaultAuthType(platform || 'claude'),
+  connectivityTestEndpoint: '',
+  connectivityAuthType: '',
 })
 
 // Level 描述文本映射（1-10）
@@ -2402,10 +2434,24 @@ const openEditModal = (card: AutomationCard) => {
     supportedModels: card.supportedModels || {},
     modelMapping: card.modelMapping || {},
     cliConfig: card.cliConfig || {},
-    connectivityCheck: card.connectivityCheck || false,
-    connectivityTestModel: card.connectivityTestModel || '',
-    connectivityTestEndpoint: card.connectivityTestEndpoint || '/v1/messages',
-    connectivityAuthType: card.connectivityAuthType || 'x-api-key',
+    // 可用性监控配置（新）- 兼容从旧字段迁移
+    availabilityMonitorEnabled:
+      card.availabilityMonitorEnabled ?? card.connectivityCheck ?? false,
+    connectivityAutoBlacklist: card.connectivityAutoBlacklist ?? false,
+    availabilityConfig: {
+      testModel:
+        card.availabilityConfig?.testModel || card.connectivityTestModel || '',
+      testEndpoint:
+        card.availabilityConfig?.testEndpoint ||
+        card.connectivityTestEndpoint ||
+        getDefaultEndpoint(activeTab.value),
+      timeout: card.availabilityConfig?.timeout || 15000,
+    },
+    // 旧连通性字段不再写入表单
+    connectivityCheck: false,
+    connectivityTestModel: '',
+    connectivityTestEndpoint: '',
+    connectivityAuthType: '',
   })
   connectivityTestResult.value = null
   modalState.errors.apiUrl = ''
@@ -2452,10 +2498,21 @@ const submitModal = async () => {
       supportedModels: modalState.form.supportedModels || {},
       modelMapping: modalState.form.modelMapping || {},
       cliConfig: modalState.form.cliConfig || {},
-      connectivityCheck: modalState.form.connectivityCheck || false,
-      connectivityTestModel: modalState.form.connectivityTestModel || '',
-      connectivityTestEndpoint: modalState.form.connectivityTestEndpoint || '/v1/messages',
-      connectivityAuthType: modalState.form.connectivityAuthType || 'x-api-key',
+      // 可用性监控配置（新）
+      availabilityMonitorEnabled: !!modalState.form.availabilityMonitorEnabled,
+      connectivityAutoBlacklist: !!modalState.form.connectivityAutoBlacklist,
+      availabilityConfig: {
+        testModel: modalState.form.availabilityConfig?.testModel || '',
+        testEndpoint:
+          modalState.form.availabilityConfig?.testEndpoint ||
+          getDefaultEndpoint(modalState.tabId),
+        timeout: modalState.form.availabilityConfig?.timeout || 15000,
+      },
+      // 旧连通性字段清空（避免再次写入）
+      connectivityCheck: false,
+      connectivityTestModel: '',
+      connectivityTestEndpoint: '',
+      connectivityAuthType: '',
     })
     if (prevLevel !== nextLevel) {
       sortProvidersByLevel(list)
@@ -2476,10 +2533,21 @@ const submitModal = async () => {
       supportedModels: modalState.form.supportedModels || {},
       modelMapping: modalState.form.modelMapping || {},
       cliConfig: modalState.form.cliConfig || {},
-      connectivityCheck: modalState.form.connectivityCheck || false,
-      connectivityTestModel: modalState.form.connectivityTestModel || '',
-      connectivityTestEndpoint: modalState.form.connectivityTestEndpoint || '/v1/messages',
-      connectivityAuthType: modalState.form.connectivityAuthType || 'x-api-key',
+      // 可用性监控配置（新）
+      availabilityMonitorEnabled: !!modalState.form.availabilityMonitorEnabled,
+      connectivityAutoBlacklist: !!modalState.form.connectivityAutoBlacklist,
+      availabilityConfig: {
+        testModel: modalState.form.availabilityConfig?.testModel || '',
+        testEndpoint:
+          modalState.form.availabilityConfig?.testEndpoint ||
+          getDefaultEndpoint(modalState.tabId),
+        timeout: modalState.form.availabilityConfig?.timeout || 15000,
+      },
+      // 旧连通性字段清空
+      connectivityCheck: false,
+      connectivityTestModel: '',
+      connectivityTestEndpoint: '',
+      connectivityAuthType: '',
     }
     list.push(newCard)
     sortProvidersByLevel(list)
