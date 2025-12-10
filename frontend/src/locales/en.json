@@ -288,6 +288,7 @@
           "level": "Lower numbers = higher priority. Level 1 providers are tried first, then Level 2, etc.",
           "availabilityMonitor": "Enable background health checks for this provider. Checks are performed periodically to monitor availability.",
           "connectivityAutoBlacklist": "Automatically blacklist this provider if health checks fail repeatedly",
+          "availabilityAdvancedConfig": "Advanced configuration (test model, endpoint, timeout) can be edited on the Availability page",
           "availabilityTestModel": "Model to use for health checks. Leave empty to use platform default.",
           "availabilityTestEndpoint": "API endpoint for health checks. Leave empty to use platform default.",
           "availabilityTimeout": "Timeout for health check requests in milliseconds (default: 15000)",

@@ -289,6 +289,7 @@
           "level": "数字越小优先级越高，Level 1 会被优先尝试，失败后依次尝试 Level 2、Level 3 等",
           "availabilityMonitor": "启用后会定期进行健康检查，监控此供应商的可用性状态",
           "connectivityAutoBlacklist": "健康检查失败时自动拉黑该供应商",
+          "availabilityAdvancedConfig": "高级配置（测试模型、端点、超时）可在可用性页面中编辑",
           "availabilityTestModel": "用于健康检查的模型，留空则使用平台默认模型",
           "availabilityTestEndpoint": "用于健康检查的 API 端点，留空则使用平台默认端点",
           "availabilityTimeout": "健康检查请求的超时时间（毫秒），默认 15000",

@@ -706,40 +706,11 @@
                   <span class="field-hint">{{ t('components.main.form.hints.connectivityAutoBlacklist') }}</span>
                 </div>
 
-                <!-- 高级配置 -->
+                <!-- 高级配置提示 -->
                 <div v-if="modalState.form.availabilityMonitorEnabled" class="form-field">
-                  <span>{{ t('components.main.form.labels.availabilityTestModel') }}</span>
-                  <div class="model-select-combo">
-                    <BaseInput
-                      v-model="modalState.form.availabilityConfig!.testModel"
-                      :placeholder="t('components.main.form.placeholders.availabilityTestModel')"
-                      class="model-input"
-                    />
-                  </div>
-                  <span class="field-hint">{{ t('components.main.form.hints.availabilityTestModel') }}</span>
-                </div>
-
-                <div v-if="modalState.form.availabilityMonitorEnabled" class="form-field">
-                  <span>{{ t('components.main.form.labels.availabilityTestEndpoint') }}</span>
-                  <div class="model-select-combo">
-                    <BaseInput
-                      v-model="modalState.form.availabilityConfig!.testEndpoint"
-                      :placeholder="t('components.main.form.placeholders.availabilityTestEndpoint')"
-                      class="model-input"
-                    />
-                  </div>
-                  <span class="field-hint">{{ t('components.main.form.hints.availabilityTestEndpoint') }}</span>
-                </div>
-
-                <div v-if="modalState.form.availabilityMonitorEnabled" class="form-field">
-                  <span>{{ t('components.main.form.labels.availabilityTimeout') }}</span>
-                  <input
-                    v-model.number="modalState.form.availabilityConfig!.timeout"
-                    type="number"
-                    placeholder="15000"
-                    class="model-input"
-                  />
-                  <span class="field-hint">{{ t('components.main.form.hints.availabilityTimeout') }}</span>
+                  <span class="field-hint" style="color: #6b7280;">
+                    💡 {{ t('components.main.form.hints.availabilityAdvancedConfig') }}
+                  </span>
                 </div>
 
                 <footer class="form-actions">

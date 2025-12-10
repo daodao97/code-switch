@@ -114,6 +114,10 @@ func main() {
 	speedTestService := services.NewSpeedTestService()
 	connectivityTestService := services.NewConnectivityTestService(providerService, blacklistService, settingsService)
 	healthCheckService := services.NewHealthCheckService(providerService, blacklistService, settingsService)
+	// 初始化健康检查数据库表
+	if err := healthCheckService.Start(); err != nil {
+		log.Fatalf("初始化健康检查服务失败: %v", err)
+	}
 	dockService := dock.New()
 	versionService := NewVersionService()
 	consoleService := services.NewConsoleService()
