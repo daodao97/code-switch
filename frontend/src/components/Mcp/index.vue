@@ -1138,14 +1138,14 @@ onMounted(() => {
   display: flex;
   gap: 0;
   margin-bottom: 1rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid var(--mac-border);
 }
 
 .modal-tab {
   padding: 0.75rem 1.25rem;
   background: none;
   border: none;
-  color: rgba(255, 255, 255, 0.6);
+  color: var(--mac-text-secondary);
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
@@ -1154,11 +1154,12 @@ onMounted(() => {
 }
 
 .modal-tab:hover {
-  color: rgba(255, 255, 255, 0.8);
+  color: var(--mac-text);
 }
 
 .modal-tab.active {
-  color: var(--accent-color, #4ade80);
+  color: var(--mac-accent);
+  font-weight: 600;
 }
 
 .modal-tab.active::after {
@@ -1168,7 +1169,7 @@ onMounted(() => {
   left: 0;
   right: 0;
   height: 2px;
-  background: var(--accent-color, #4ade80);
+  background: var(--mac-accent);
   border-radius: 1px 1px 0 0;
 }
 

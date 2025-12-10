@@ -339,14 +339,14 @@ onUnmounted(() => {
                     {{ t('availability.check') }}
                   </button>
 
-                  <!-- 编辑配置按钮（始终显示，未启用时置灰）-->
+                  <!-- 编辑配置按钮（高对比度设计）-->
                   <button
                     @click="timeline.availabilityMonitorEnabled && editConfig(platform, timeline)"
                     :disabled="!timeline.availabilityMonitorEnabled"
                     :title="timeline.availabilityMonitorEnabled ? '' : t('availability.enableToMonitor')"
-                    class="px-3 py-1 text-sm rounded-lg transition-colors bg-[var(--mac-accent)] text-white hover:opacity-90 disabled:bg-gray-300 disabled:text-gray-500 disabled:cursor-not-allowed dark:disabled:bg-gray-700 dark:disabled:text-gray-400"
+                    class="px-4 py-2 text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg border-2 border-indigo-400 shadow-md hover:shadow-lg transition-all disabled:bg-gray-300 disabled:text-gray-500 disabled:border-gray-300 disabled:cursor-not-allowed dark:disabled:bg-gray-700 dark:disabled:text-gray-400 dark:disabled:border-gray-700"
                   >
-                    {{ t('availability.editConfig') }}
+                    ✏️ {{ t('availability.editConfig') }}
                   </button>
                 </div>
               </div>
