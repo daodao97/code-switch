@@ -285,6 +285,7 @@
           "name": "Vendor name",
           "apiUrl": "API endpoint",
           "apiKey": "API key",
+          "apiEndpoint": "API Endpoint Path (optional)",
           "officialSite": "Official site",
           "icon": "Icon",
           "enabled": "Enabled",
@@ -303,6 +304,7 @@
           "name": "e.g. AICoding.sh",
           "apiUrl": "https://api.aicoding.sh",
           "apiKey": "sk-xxxxx",
+          "apiEndpoint": "Leave blank for default, e.g. /v1/chat/completions",
           "officialSite": "https://vendor.com",
           "icon": "e.g. aicoding, kimi",
           "availabilityTestModel": "Leave empty to use platform default",
@@ -313,6 +315,7 @@
         },
         "hints": {
           "level": "Lower numbers = higher priority. Level 1 providers are tried first, then Level 2, etc.",
+          "apiEndpoint": "Override platform default endpoint. Leave blank for default (claude: /v1/messages, codex: /responses). For GLM models use /v1/chat/completions",
           "availabilityMonitor": "Enable background health checks for this provider. Checks are performed periodically to monitor availability.",
           "connectivityAutoBlacklist": "Automatically blacklist this provider if health checks fail repeatedly",
           "availabilityAdvancedConfig": "Advanced configuration (test model, endpoint, timeout) can be edited on the Availability page",

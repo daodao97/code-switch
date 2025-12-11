@@ -587,6 +587,17 @@
                   />
                 </label>
 
+                <!-- API 端点（可选）-->
+                <label class="form-field">
+                  <span>{{ t('components.main.form.labels.apiEndpoint') }}</span>
+                  <BaseInput
+                    v-model="modalState.form.apiEndpoint"
+                    type="text"
+                    :placeholder="t('components.main.form.placeholders.apiEndpoint')"
+                  />
+                  <span class="field-hint">{{ t('components.main.form.hints.apiEndpoint') }}</span>
+                </label>
+
                 <div class="form-field">
                   <span>{{ t('components.main.form.labels.icon') }}</span>
                   <Listbox v-model="modalState.form.icon" v-slot="{ open }">
