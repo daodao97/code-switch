@@ -334,7 +334,8 @@ jobs:
           echo "Generating release body for v$VERSION"
 
           # 提取当前版本的更新内容（从标题到下一个版本标题之前）
-          awk "/^# Code Switch v$VERSION/,/^# Code Switch v[0-9]/" RELEASE_NOTES.md | head -n -1 > /tmp/version_notes.md
+          # 注意：先用 tr 去除 Windows CRLF 换行符，否则 awk 匹配失败
+          tr -d '\r' < RELEASE_NOTES.md | awk "/^# Code Switch v$VERSION/,/^# Code Switch v[0-9]/" | head -n -1 > /tmp/version_notes.md
 
           # 如果没找到版本说明，使用默认内容
           if [ ! -s /tmp/version_notes.md ]; then

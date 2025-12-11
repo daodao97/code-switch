@@ -132,6 +132,17 @@ async function toggleMonitor(platform: string, providerId: number, enabled: bool
   }
 }
 
+// 启用监控并打开配置编辑
+async function enableMonitoringAndEdit(platform: string, timeline: ProviderTimeline) {
+  try {
+    await toggleMonitor(platform, timeline.providerId, true)
+    // 等待状态更新后打开配置弹窗
+    editConfig(platform, { ...timeline, availabilityMonitorEnabled: true })
+  } catch (error) {
+    console.error('Failed to enable monitoring and edit:', error)
+  }
+}
+
 // 格式化时间
 function formatTime(dateStr: string): string {
   if (!dateStr) return '-'
@@ -359,23 +370,25 @@ onUnmounted(() => {
                     {{ t('availability.check') }}
                   </button>
 
-                  <!-- 编辑配置按钮 (Primary - Gemini 设计方案 C: Elegant Glass) -->
+                  <!-- 启用监控按钮 (监控关闭时显示 - 高对比度吸引注意力) -->
                   <button
-                    @click="timeline.availabilityMonitorEnabled && editConfig(platform, timeline)"
-                    :disabled="!timeline.availabilityMonitorEnabled"
-                    :title="timeline.availabilityMonitorEnabled ? '' : t('availability.enableToMonitor')"
-                    class="group relative overflow-hidden px-4 py-2 rounded-lg bg-zinc-900 dark:bg-indigo-600 text-white shadow-md transition-all duration-200 hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] disabled:bg-gray-300 disabled:cursor-not-allowed dark:disabled:bg-gray-700"
+                    v-if="!timeline.availabilityMonitorEnabled"
+                    @click="enableMonitoringAndEdit(platform, timeline)"
+                    class="bg-gradient-to-r from-blue-600 via-blue-500 to-cyan-400 hover:from-blue-700 hover:via-blue-600 hover:to-cyan-500 text-white font-bold py-1.5 px-4 rounded shadow-lg transform transition-all duration-200 hover:-translate-y-0.5 hover:shadow-blue-500/30 text-sm"
                   >
-                    <!-- 内部光泽层 (Glass highlight) -->
-                    <div class="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/40 to-transparent"></div>
-                    <div class="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-black/20 to-transparent"></div>
+                    {{ t('availability.enableMonitoring') }}
+                  </button>
 
-                    <span class="relative flex items-center gap-2 text-sm font-semibold tracking-wide">
-                      <svg class="w-4 h-4 transition-transform group-hover:scale-110" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                      </svg>
-                      {{ t('availability.editConfig') }}
-                    </span>
+                  <!-- 编辑配置按钮 (监控开启时显示 - 相对低调但清晰可见) -->
+                  <button
+                    v-else
+                    @click="editConfig(platform, timeline)"
+                    class="bg-gray-800 hover:bg-gray-700 dark:bg-gray-700 dark:hover:bg-gray-600 border border-gray-600 dark:border-gray-500 text-gray-300 hover:text-white font-medium py-1.5 px-4 rounded transition-colors duration-200 flex items-center gap-2 text-sm"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                    </svg>
+                    {{ t('availability.editConfig') }}
                   </button>
                 </div>
               </div>

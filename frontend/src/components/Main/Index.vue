@@ -583,8 +583,12 @@
                   <BaseInput
                     v-model="modalState.form.apiKey"
                     type="text"
+                    :disabled="modalState.tabId === 'gemini' && modalState.editingId !== null"
                     :placeholder="t('components.main.form.placeholders.apiKey')"
                   />
+                  <span v-if="modalState.tabId === 'gemini' && modalState.editingId !== null" class="field-hint text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    {{ t('components.gemini.form.apiKeyReadonlyHint') }}
+                  </span>
                 </label>
 
                 <!-- API 端点（可选）-->

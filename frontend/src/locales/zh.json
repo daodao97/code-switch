@@ -48,6 +48,7 @@
       "operationalThresholdHint": "响应延迟小于此值判定为正常"
     },
     "editConfig": "编辑配置",
+    "enableMonitoring": "启用监控",
     "enableToMonitor": "请先启用可用性监控",
     "configTitle": "可用性高级配置",
     "field": {
@@ -702,6 +703,7 @@
         "name": "供应商名称",
         "baseUrl": "API 地址",
         "apiKey": "API 密钥",
+        "apiKeyReadonlyHint": "API 密钥由系统管理，编辑模式下不可修改",
         "model": "默认模型",
         "cancel": "取消",
         "save": "保存",

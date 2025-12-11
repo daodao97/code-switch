@@ -163,7 +163,7 @@ func (s *CliConfigService) GetLockedFields(platform string) []string {
 	case PlatformCodex:
 		return []string{"model_provider", "model_providers.code-switch.base_url", "model_providers.code-switch.env_key"}
 	case PlatformGemini:
-		return []string{"GOOGLE_GEMINI_BASE_URL"}
+		return []string{"GOOGLE_GEMINI_BASE_URL", "GEMINI_API_KEY"}
 	default:
 		return []string{}
 	}
@@ -641,15 +641,15 @@ func (s *CliConfigService) getGeminiConfig() (*CLIConfig, error) {
 		},
 	)
 
-	// 可编辑字段
+	// API Key (锁定字段，由系统管理)
 	apiKey := config.EnvContent["GEMINI_API_KEY"]
 	config.Fields = append(config.Fields, CLIConfigField{
 		Key:    "GEMINI_API_KEY",
 		Value:  apiKey,
-		Locked: false,
+		Locked: true,
+		Hint:   "由系统管理，请勿手动修改",
 		Type:   "string",
 	})
-	config.Editable["GEMINI_API_KEY"] = apiKey
 
 	model := config.EnvContent["GEMINI_MODEL"]
 	if model == "" {
@@ -699,7 +699,8 @@ func (s *CliConfigService) saveGeminiConfig(editable map[string]interface{}) err
 	// 更新可编辑字段
 	for k, v := range editable {
 		if str, ok := v.(string); ok {
-			if k != "GOOGLE_GEMINI_BASE_URL" { // 不允许覆盖锁定字段
+			// 不允许覆盖锁定字段
+			if k != "GOOGLE_GEMINI_BASE_URL" && k != "GEMINI_API_KEY" {
 				envMap[k] = str
 			}
 		}

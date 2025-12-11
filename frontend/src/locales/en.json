@@ -48,6 +48,7 @@
       "operationalThresholdHint": "Response latency below this is considered operational"
     },
     "editConfig": "Edit Config",
+    "enableMonitoring": "Enable Monitoring",
     "enableToMonitor": "Please enable availability monitoring first",
     "configTitle": "Advanced Availability Config",
     "field": {
@@ -701,6 +702,7 @@
         "name": "Provider name",
         "baseUrl": "API URL",
         "apiKey": "API Key",
+        "apiKeyReadonlyHint": "API Key is managed by the system and cannot be modified in edit mode",
         "model": "Default model",
         "cancel": "Cancel",
         "save": "Save",
