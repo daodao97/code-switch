@@ -239,6 +239,7 @@
               </div>
               <template v-if="previewEditable">
                 <textarea
+                  :ref="index === 0 ? (el) => firstTextareaRef = el as HTMLTextAreaElement : undefined"
                   v-model="editingContent[getPreviewKey(file, index)]"
                   class="cli-preview-textarea"
                   rows="8"
@@ -282,7 +283,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   fetchCLIConfig,
@@ -320,6 +321,7 @@ const previewEditable = ref(false)
 const previewSaving = ref(false)
 const editingContent = ref<Record<string, string>>({})
 const previewErrors = ref<Record<string, string>>({})
+const firstTextareaRef = ref<HTMLTextAreaElement | null>(null)
 
 // 获取所有预置字段的 key（包括锁定和可编辑）
 const presetFieldKeys = computed(() => {
@@ -787,9 +789,16 @@ const togglePreviewEditable = () => {
   if (!previewEditable.value) {
     // 关闭编辑模式时清理错误
     previewErrors.value = {}
-  } else if (Object.keys(editingContent.value).length === 0) {
-    // 首次解锁时，如果还没初始化，补一次
-    initPreviewEditing()
+  } else {
+    // 解锁编辑模式时
+    if (Object.keys(editingContent.value).length === 0) {
+      // 首次解锁时，如果还没初始化，补一次
+      initPreviewEditing()
+    }
+    // 等待 DOM 更新后聚焦第一个 textarea（修复 macOS WebView 键盘输入问题）
+    nextTick(() => {
+      firstTextareaRef.value?.focus()
+    })
   }
 }
 
