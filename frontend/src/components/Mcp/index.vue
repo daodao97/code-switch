@@ -203,6 +203,11 @@
         </button>
       </div>
 
+      <!-- DEBUG: 状态显示 -->
+      <div style="background: #333; padding: 8px; margin-bottom: 8px; font-size: 12px; color: #0f0; font-family: monospace;">
+        [DEBUG] modalMode={{ modalMode }} | jsonParseResult={{ jsonParseResult ? 'has value' : 'null' }} | jsonParsing={{ jsonParsing }}
+      </div>
+
       <div class="modal-scroll">
       <!-- 表单模式 -->
       <form v-if="modalMode === 'form'" class="vendor-form" @submit.prevent="submitModal">
@@ -524,7 +529,12 @@ const focusJsonTextarea = () => {
 watch(
   [() => modalState.open, modalMode, jsonParseResult, jsonParsing],
   ([open, mode, result, parsing]) => {
-    if (!open || mode !== 'json' || result !== null || parsing) return
+    console.log('[DEBUG] watch triggered:', { open, mode, result, parsing })
+    if (!open || mode !== 'json' || result !== null || parsing) {
+      console.log('[DEBUG] watch: conditions not met, skipping focus')
+      return
+    }
+    console.log('[DEBUG] watch: calling focusJsonTextarea')
     focusJsonTextarea()
   },
   { flush: 'post' }
@@ -668,6 +678,7 @@ const onPlatformToggle = async (server: McpServer, platform: McpPlatform, event:
 }
 
 const openCreateModal = () => {
+  console.log('[DEBUG] openCreateModal called')
   modalState.open = true
   modalState.editingName = ''
   modalState.form = createEmptyForm()
@@ -675,6 +686,7 @@ const openCreateModal = () => {
   // 重置模式和 JSON 导入状态
   modalMode.value = 'form'
   resetJsonImport()
+  console.log('[DEBUG] openCreateModal done:', { open: modalState.open, mode: modalMode.value })
 }
 
 const openEditModal = (server: McpServer) => {
@@ -711,13 +723,16 @@ const closeModal = () => {
 
 // 切换 Modal 模式
 const switchModalMode = (mode: ModalMode) => {
+  console.log('[DEBUG] switchModalMode called:', { from: modalMode.value, to: mode })
   modalMode.value = mode
   jsonError.value = ''
   modalError.value = ''
   // 切到 JSON 模式时，确保清除预览结果，显示输入界面
   if (mode === 'json') {
     jsonParseResult.value = null
+    console.log('[DEBUG] JSON mode activated, jsonParseResult cleared')
   }
+  console.log('[DEBUG] switchModalMode done:', { modalMode: modalMode.value, jsonParseResult: jsonParseResult.value })
 }
 
 // 填充示例 JSON

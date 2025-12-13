@@ -129,11 +129,15 @@ const unlockScroll = () => {
 watch(
   () => props.open,
   (open) => {
+    console.log('[DEBUG InlineModal] open changed:', open)
     if (open) {
       lastActiveElement = document.activeElement
       window.addEventListener('keydown', onKeyDown, true)
       lockScroll()
-      nextTick(() => closeButtonRef.value?.focus())
+      nextTick(() => {
+        console.log('[DEBUG InlineModal] focusing close button')
+        closeButtonRef.value?.focus()
+      })
     } else {
       window.removeEventListener('keydown', onKeyDown, true)
       unlockScroll()
