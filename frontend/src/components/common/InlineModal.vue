@@ -1,18 +1,18 @@
 <template>
   <Transition name="modal-fade">
-    <div v-if="open" class="modal-backdrop" role="presentation" @click.self="emitClose">
-      <div class="modal-overlay-noevent"></div>
-      <div class="modal-wrapper">
+    <div v-if="open" class="modal-backdrop" role="presentation">
+      <!-- 遮罩层：点击关闭 -->
+      <div class="modal-overlay" @click="emitClose"></div>
+      <!-- 内容容器：统一阻断冒泡 -->
+      <div class="modal-wrapper" @click.stop>
         <Transition name="modal-slide" appear>
           <div
-            v-if="open"
             ref="panelRef"
             :class="['modal', variantClass]"
             role="dialog"
             aria-modal="true"
             :aria-labelledby="titleId"
             tabindex="-1"
-            @click.stop
           >
             <header class="modal-header">
               <h2 :id="titleId" class="modal-title">{{ title }}</h2>
