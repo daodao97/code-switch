@@ -189,7 +189,7 @@
           type="button"
           class="panel-tab"
           :class="{ active: modalMode === 'form' }"
-          @click="switchModalMode('form')"
+          @click.stop="switchModalMode('form')"
         >
           {{ t('components.mcp.jsonImport.tabForm') }}
         </button>
@@ -197,7 +197,7 @@
           type="button"
           class="panel-tab"
           :class="{ active: modalMode === 'json' }"
-          @click="switchModalMode('json')"
+          @click.stop="switchModalMode('json')"
         >
           {{ t('components.mcp.jsonImport.tabJson') }}
         </button>

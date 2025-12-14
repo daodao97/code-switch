@@ -9,6 +9,7 @@
         aria-modal="true"
         :aria-labelledby="titleId"
         tabindex="-1"
+        @keydown.capture="onKeyDown"
       >
         <!-- Header -->
         <header class="panel-header">
@@ -68,11 +69,18 @@ const handleClose = () => {
 
 const onKeyDown = (e: KeyboardEvent) => {
   if (!props.open) return
-  if (e.key === 'Escape') {
-    e.preventDefault()
-    e.stopPropagation()
-    handleClose()
+  if (e.key !== 'Escape') return
+
+  // 只在焦点位于面板内部时才响应 Esc，避免 WebView 异常事件误触发关闭
+  const panelEl = panelRef.value
+  const activeEl = document.activeElement
+  if (!panelEl || !activeEl || !panelEl.contains(activeEl)) {
+    return
   }
+
+  e.preventDefault()
+  e.stopPropagation()
+  handleClose()
 }
 
 watch(
@@ -81,11 +89,9 @@ watch(
     if (isOpen) {
       lastActiveElement = document.activeElement
       document.body.style.overflow = 'hidden'
-      window.addEventListener('keydown', onKeyDown, true)
       nextTick(() => closeButtonRef.value?.focus())
     } else {
       document.body.style.overflow = ''
-      window.removeEventListener('keydown', onKeyDown, true)
       if (lastActiveElement instanceof HTMLElement) {
         try {
           lastActiveElement.focus()
@@ -100,7 +106,6 @@ watch(
 )
 
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onKeyDown, true)
   document.body.style.overflow = ''
 })
 </script>
