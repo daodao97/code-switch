@@ -593,7 +593,7 @@ func (prs *ProviderRelayService) forwardRequest(
 		SetHeaders(headers).
 		SetQueryParams(query).
 		SetRetry(1, 500*time.Millisecond).
-		SetTimeout(3 * time.Hour) // 3小时超时，适配大型项目分析
+		SetTimeout(32 * time.Hour) // 32小时超时，适配超大型项目分析
 
 	reqBody := bytes.NewReader(bodyBytes)
 	req = req.SetBody(reqBody)
