@@ -1,6 +1,5 @@
 <template>
-  <Teleport to="body">
-    <!-- DEBUG: 临时禁用 Transition 测试是否动画卡住 -->
+  <!-- DEBUG: 临时禁用 Teleport 测试是否传送目标问题 -->
     <div
       v-if="open"
         v-bind="$attrs"
@@ -44,7 +43,6 @@
           <slot name="footer"></slot>
         </footer>
       </div>
-  </Teleport>
 </template>
 
 <script setup lang="ts">
