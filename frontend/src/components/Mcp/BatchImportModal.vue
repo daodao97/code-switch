@@ -147,6 +147,7 @@ const conflictCount = computed(() => conflictNames.value.length)
 watch(
   () => props.open,
   (isOpen) => {
+    console.log('[BatchImportModal] open prop changed to:', isOpen)
     if (isOpen) {
       resetState()
       nextTick(() => textareaRef.value?.focus())
