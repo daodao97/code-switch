@@ -1,7 +1,7 @@
 <template>
-  <!-- DEBUG: 添加极端可见样式 -->
+  <!-- DEBUG: 使用 props.open 替代 open -->
     <div
-      v-if="open"
+      v-if="props.open"
         v-bind="$attrs"
         ref="panelRef"
         class="panel-container"
