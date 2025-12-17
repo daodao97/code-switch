@@ -612,7 +612,8 @@
       },
       "platforms": {
         "claude": "Claude Code",
-        "codex": "Codex"
+        "codex": "Codex",
+        "gemini": "Gemini CLI"
       },
       "form": {
         "createTitle": "Create MCP server",

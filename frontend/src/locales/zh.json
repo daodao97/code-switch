@@ -613,7 +613,8 @@
       },
       "platforms": {
         "claude": "Claude Code",
-        "codex": "Codex"
+        "codex": "Codex",
+        "gemini": "Gemini CLI"
       },
       "form": {
         "createTitle": "新增 MCP 服务器",

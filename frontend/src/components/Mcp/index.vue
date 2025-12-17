@@ -498,6 +498,7 @@ const onBatchImported = async () => {
 const platformOptions = computed(() => [
   { id: 'claude-code' as McpPlatform, label: t('components.mcp.platforms.claude') },
   { id: 'codex' as McpPlatform, label: t('components.mcp.platforms.codex') },
+  { id: 'gemini' as McpPlatform, label: t('components.mcp.platforms.gemini') },
 ])
 
 const formMissingPlaceholders = computed(() => detectPlaceholders(modalState.form.url, modalState.form.argsText))
@@ -575,8 +576,18 @@ const typeLabel = (type: McpServerType) =>
 const platformEnabled = (server: McpServer, platform: McpPlatform) =>
   server.enable_platform?.includes(platform) ?? false
 
-const platformActive = (server: McpServer, platform: McpPlatform) =>
-  platform === 'claude-code' ? server.enabled_in_claude : server.enabled_in_codex
+const platformActive = (server: McpServer, platform: McpPlatform) => {
+  switch (platform) {
+    case 'claude-code':
+      return server.enabled_in_claude
+    case 'codex':
+      return server.enabled_in_codex
+    case 'gemini':
+      return server.enabled_in_gemini
+    default:
+      return false
+  }
+}
 
 const hasMissingPlaceholders = (server: McpServer) => (server.missing_placeholders?.length ?? 0) > 0
 
@@ -950,6 +961,10 @@ const submitModal = async () => {
       modalState.editingName === trimmedName
         ? existing?.enabled_in_codex ?? false
         : servers.value.find((server) => server.name === modalState.editingName)?.enabled_in_codex ?? false,
+    enabled_in_gemini:
+      modalState.editingName === trimmedName
+        ? existing?.enabled_in_gemini ?? false
+        : servers.value.find((server) => server.name === modalState.editingName)?.enabled_in_gemini ?? false,
     missing_placeholders: [],
   }
 

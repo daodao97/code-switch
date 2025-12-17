@@ -16,13 +16,16 @@ import (
 )
 
 const (
-	mcpStoreDir     = ".code-switch"
-	mcpStoreFile    = "mcp.json"
-	claudeMcpFile   = ".claude.json"
-	codexDirName    = ".codex"
-	codexConfigFile = "config.toml"
-	platClaudeCode  = "claude-code"
-	platCodex       = "codex"
+	mcpStoreDir      = ".code-switch"
+	mcpStoreFile     = "mcp.json"
+	claudeMcpFile    = ".claude.json"
+	codexDirName     = ".codex"
+	codexConfigFile  = "config.toml"
+	geminiDirName    = ".gemini"
+	geminiConfigFile = "settings.json"
+	platClaudeCode   = "claude-code"
+	platCodex        = "codex"
+	platGemini       = "gemini"
 )
 
 var builtInServers = map[string]rawMCPServer{
@@ -62,6 +65,7 @@ type MCPServer struct {
 	EnablePlatform      []string          `json:"enable_platform"`
 	EnabledInClaude     bool              `json:"enabled_in_claude"`
 	EnabledInCodex      bool              `json:"enabled_in_codex"`
+	EnabledInGemini     bool              `json:"enabled_in_gemini"`
 	MissingPlaceholders []string          `json:"missing_placeholders"`
 }
 
@@ -76,7 +80,16 @@ type rawMCPServer struct {
 	EnablePlatform []string          `json:"enable_platform"`
 }
 
+type mcpStorePayload struct {
+	Servers         map[string]rawMCPServer `json:"servers"`
+	DeletedBuiltins []string                `json:"deletedBuiltins,omitempty"`
+}
+
 type claudeMcpFilePayload struct {
+	Servers map[string]json.RawMessage `json:"mcpServers"`
+}
+
+type geminiMcpFilePayload struct {
 	Servers map[string]json.RawMessage `json:"mcpServers"`
 }
 
@@ -103,6 +116,7 @@ func (ms *MCPService) ListServers() ([]MCPServer, error) {
 
 	claudeEnabled := loadClaudeEnabledServers()
 	codexEnabled := loadCodexEnabledServers()
+	geminiEnabled := loadGeminiEnabledServers()
 
 	names := make([]string, 0, len(config))
 	for name := range config {
@@ -127,6 +141,7 @@ func (ms *MCPService) ListServers() ([]MCPServer, error) {
 			EnablePlatform:  platforms,
 			EnabledInClaude: containsNormalized(claudeEnabled, name),
 			EnabledInCodex:  containsNormalized(codexEnabled, name),
+			EnabledInGemini: containsNormalized(geminiEnabled, name),
 		}
 		server.MissingPlaceholders = detectPlaceholders(server.URL, server.Args)
 		servers = append(servers, server)
@@ -171,6 +186,7 @@ func (ms *MCPService) SaveServers(servers []MCPServer) error {
 			EnablePlatform:  platforms,
 			EnabledInClaude: server.EnabledInClaude,
 			EnabledInCodex:  server.EnabledInCodex,
+			EnabledInGemini: server.EnabledInGemini,
 		}
 		raw[name] = rawMCPServer{
 			Type:           typ,
@@ -192,13 +208,25 @@ func (ms *MCPService) SaveServers(servers []MCPServer) error {
 		}
 	}
 
-	if err := ms.saveConfig(raw); err != nil {
+	// Calculate deletedBuiltins: built-in servers that are missing from raw
+	var deletedBuiltins []string
+	for builtInName := range builtInServers {
+		if _, exists := raw[builtInName]; !exists {
+			deletedBuiltins = append(deletedBuiltins, builtInName)
+		}
+	}
+	sort.Strings(deletedBuiltins)
+
+	if err := ms.saveStore(raw, deletedBuiltins); err != nil {
 		return err
 	}
 	if err := ms.syncClaudeServers(normalized); err != nil {
 		return err
 	}
 	if err := ms.syncCodexServers(normalized); err != nil {
+		return err
+	}
+	if err := ms.syncGeminiServers(normalized); err != nil {
 		return err
 	}
 	return nil
@@ -221,41 +249,50 @@ func (ms *MCPService) loadConfig() (map[string]rawMCPServer, error) {
 	if err != nil {
 		return nil, err
 	}
-	payload := map[string]rawMCPServer{}
-	if data, err := os.ReadFile(path); err == nil {
-		if len(data) > 0 {
-			if err := json.Unmarshal(data, &payload); err != nil {
+
+	servers := map[string]rawMCPServer{}
+	var deletedBuiltins []string
+
+	if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
+		// Try parsing new format first (with servers and deletedBuiltins)
+		var storePayload mcpStorePayload
+		if err := json.Unmarshal(data, &storePayload); err == nil && storePayload.Servers != nil {
+			servers = storePayload.Servers
+			deletedBuiltins = storePayload.DeletedBuiltins
+		} else {
+			// Fall back to legacy flat format for backward compatibility
+			if err := json.Unmarshal(data, &servers); err != nil {
 				return nil, err
 			}
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
 
-	for name, entry := range payload {
-		payload[name] = normalizeRawEntry(entry)
+	for name, entry := range servers {
+		servers[name] = normalizeRawEntry(entry)
 	}
 
 	changed := false
-	if imported, err := ms.importFromClaude(payload); err == nil {
-		if ms.mergeImportedServers(payload, imported) {
+	if imported, err := ms.importFromClaude(servers); err == nil {
+		if ms.mergeImportedServers(servers, imported) {
 			changed = true
 		}
 	} else {
 		return nil, err
 	}
 
-	if ensureBuiltInServers(payload) {
+	if ensureBuiltInServers(servers, deletedBuiltins) {
 		changed = true
 	}
 
 	if changed {
-		if err := ms.saveConfig(payload); err != nil {
-			return payload, err
+		if err := ms.saveStore(servers, deletedBuiltins); err != nil {
+			return servers, err
 		}
 	}
 
-	return payload, nil
+	return servers, nil
 }
 
 func (ms *MCPService) importFromClaude(existing map[string]rawMCPServer) (map[string]rawMCPServer, error) {
@@ -316,12 +353,16 @@ func (ms *MCPService) importFromClaude(existing map[string]rawMCPServer) (map[st
 	return result, nil
 }
 
-func (ms *MCPService) saveConfig(payload map[string]rawMCPServer) error {
+func (ms *MCPService) saveStore(servers map[string]rawMCPServer, deletedBuiltins []string) error {
 	path, err := ms.configPath()
 	if err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(payload, "", "  ")
+	storePayload := mcpStorePayload{
+		Servers:         servers,
+		DeletedBuiltins: deletedBuiltins,
+	}
+	data, err := json.MarshalIndent(storePayload, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -362,6 +403,8 @@ func normalizePlatform(value string) (string, bool) {
 		return "claude-code", true
 	case "codex":
 		return "codex", true
+	case "gemini", "gemini-cli", "gemini_cli":
+		return "gemini", true
 	default:
 		return "", false
 	}
@@ -485,6 +528,27 @@ func loadCodexEnabledServers() map[string]struct{} {
 	return result
 }
 
+func loadGeminiEnabledServers() map[string]struct{} {
+	result := map[string]struct{}{}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return result
+	}
+	path := filepath.Join(home, geminiDirName, geminiConfigFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return result
+	}
+	var payload geminiMcpFilePayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return result
+	}
+	for name := range payload.Servers {
+		result[strings.ToLower(strings.TrimSpace(name))] = struct{}{}
+	}
+	return result
+}
+
 func (ms *MCPService) mergeImportedServers(target, imported map[string]rawMCPServer) bool {
 	changed := false
 	for name, entry := range imported {
@@ -506,9 +570,19 @@ func (ms *MCPService) mergeImportedServers(target, imported map[string]rawMCPSer
 	return changed
 }
 
-func ensureBuiltInServers(target map[string]rawMCPServer) bool {
+func ensureBuiltInServers(target map[string]rawMCPServer, deletedBuiltins []string) bool {
+	deletedSet := make(map[string]struct{}, len(deletedBuiltins))
+	for _, name := range deletedBuiltins {
+		deletedSet[strings.ToLower(strings.TrimSpace(name))] = struct{}{}
+	}
+
 	changed := false
 	for name, builtIn := range builtInServers {
+		// Skip deleted built-in servers (tombstone check)
+		if _, deleted := deletedSet[strings.ToLower(name)]; deleted {
+			continue
+		}
+
 		builtIn = normalizeRawEntry(builtIn)
 		if existing, ok := target[name]; ok {
 			merged := existing
@@ -600,6 +674,34 @@ func (ms *MCPService) syncCodexServers(servers []MCPServer) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
+func (ms *MCPService) syncGeminiServers(servers []MCPServer) error {
+	path, err := geminiConfigPath()
+	if err != nil {
+		return err
+	}
+	desired := make(map[string]map[string]any)
+	for _, server := range servers {
+		if !platformContains(server.EnablePlatform, platGemini) {
+			continue
+		}
+		desired[server.Name] = buildGeminiEntry(server)
+	}
+	payload := make(map[string]any)
+	if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
+		if err := json.Unmarshal(data, &payload); err != nil {
+			payload = make(map[string]any)
+		}
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	payload["mcpServers"] = desired
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
 func platformContains(platforms []string, target string) bool {
 	for _, value := range platforms {
 		if value == target {
@@ -642,6 +744,24 @@ func buildCodexEntry(server MCPServer) map[string]any {
 	return entry
 }
 
+// buildGeminiEntry creates Gemini CLI MCP server config.
+// Gemini uses "httpUrl" (not "url") for HTTP type, and omits the "type" field.
+func buildGeminiEntry(server MCPServer) map[string]any {
+	entry := make(map[string]any)
+	if server.Type == "http" {
+		entry["httpUrl"] = server.URL
+	} else {
+		entry["command"] = server.Command
+		if len(server.Args) > 0 {
+			entry["args"] = server.Args
+		}
+		if len(server.Env) > 0 {
+			entry["env"] = server.Env
+		}
+	}
+	return entry
+}
+
 func claudeConfigPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -660,6 +780,18 @@ func codexConfigPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, codexConfigFile), nil
+}
+
+func geminiConfigPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(home, geminiDirName)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, geminiConfigFile), nil
 }
 
 func detectPlaceholders(url string, args []string) []string {
