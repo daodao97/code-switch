@@ -5,10 +5,13 @@
     @close="handleClose"
   >
     <div class="import-container">
-      <p>TEST: 纯 HTML 测试</p>
-      <p>step = {{ step }}</p>
-      <textarea rows="5" placeholder="原生 textarea"></textarea>
-      <button type="button">原生按钮</button>
+      <p>TEST: BaseTextarea 测试</p>
+      <BaseTextarea
+        v-model="jsonInput"
+        placeholder="测试 BaseTextarea"
+        rows="10"
+      />
+      <BaseButton @click="handleClose">关闭</BaseButton>
     </div>
   </FullScreenPanel>
 </template>
