@@ -5,11 +5,12 @@
     @close="handleClose"
   >
     <div class="import-container">
-      <p>TEST: v-if 条件测试</p>
+      <p>TEST: ref + i18n placeholder</p>
       <div v-if="step === 'input'">
         <BaseTextarea
+          ref="textareaRef"
           v-model="jsonInput"
-          placeholder="测试 BaseTextarea"
+          :placeholder="t('components.mcp.import.placeholder')"
           rows="10"
         />
         <BaseButton @click="handleClose">关闭</BaseButton>
