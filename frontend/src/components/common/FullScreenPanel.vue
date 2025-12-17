@@ -1,7 +1,7 @@
 <template>
-  <!-- DEBUG: 极简测试，移除 $attrs -->
+  <!-- DEBUG: 无条件渲染测试 -->
     <div
-      v-if="props.open"
+      v-show="props.open"
         ref="panelRef"
         class="panel-container mcp-fullscreen-panel"
         style="background: green !important; position: fixed !important; inset: 0 !important; z-index: 99999 !important;"
