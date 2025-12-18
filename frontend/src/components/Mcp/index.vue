@@ -483,7 +483,6 @@ const confirmState = reactive<{ open: boolean; target: McpServer | null }>({
 const showBatchImport = ref(false)
 
 const openBatchImport = () => {
-  showToast('[DEBUG] openBatchImport 被调用', 'success')
   showBatchImport.value = true
 }
 
