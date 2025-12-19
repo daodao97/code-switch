@@ -139,9 +139,9 @@ func (as *AppSettingsService) defaultSettings() AppSettings {
 		ShowHeatmap:          true,
 		ShowHomeTitle:        true,
 		AutoStart:            autoStartEnabled,
-		AutoUpdate:           true,  // 默认开启自动更新
-		AutoConnectivityTest: false, // 默认关闭自动连通性检测
-		EnableSwitchNotify:   true,  // 默认开启切换通知
+		AutoUpdate:           true, // 默认开启自动更新
+		AutoConnectivityTest: true, // 默认开启自动可用性监控（开箱即用）
+		EnableSwitchNotify:   true, // 默认开启切换通知
 	}
 }
 

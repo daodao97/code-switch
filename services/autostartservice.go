@@ -3,15 +3,33 @@ package services
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
-type AutoStartService struct{}
+type AutoStartService struct {
+	homeDir string // 缓存的用户家目录（已校验）
+	homeErr error  // 家目录获取错误
+}
 
 func NewAutoStartService() *AutoStartService {
-	return &AutoStartService{}
+	home, err := getUserHomeDir()
+	return &AutoStartService{
+		homeDir: home,
+		homeErr: err,
+	}
+}
+
+// requireHome 校验家目录是否可用（仅用于 macOS/Linux）
+func (as *AutoStartService) requireHome() error {
+	if as.homeErr != nil {
+		return fmt.Errorf("无法获取用户家目录: %w", as.homeErr)
+	}
+	if as.homeDir == "" || as.homeDir == "." || !filepath.IsAbs(as.homeDir) {
+		return fmt.Errorf("无法获取用户家目录: homeDir 未初始化或无效")
+	}
+	return nil
 }
 
 // IsEnabled 检查是否已启用开机自启动
@@ -57,11 +75,73 @@ func (as *AutoStartService) Disable() error {
 }
 
 // Windows 实现
+const (
+	windowsRunKey             = `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+	windowsStartupApprovedKey = `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run`
+	windowsAutoStartValue     = "CodeSwitch"
+)
+
+func windowsRegExe() string {
+	if windir := os.Getenv("WINDIR"); windir != "" {
+		candidate := filepath.Join(windir, "System32", "reg.exe")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return "reg.exe"
+}
+
 func (as *AutoStartService) isEnabledWindows() (bool, error) {
-	key := `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-	cmd := exec.Command("reg", "query", key, "/v", "CodeSwitch")
-	err := cmd.Run()
-	return err == nil, nil
+	regExe := windowsRegExe()
+
+	// 1. 检查 Run 键是否存在
+	cmd := hideWindowCmd(regExe, "query", windowsRunKey, "/v", windowsAutoStartValue)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		lowerOut := strings.ToLower(string(out))
+		if strings.Contains(lowerOut, "unable to find") ||
+			strings.Contains(lowerOut, "无法找到") ||
+			strings.Contains(lowerOut, "找不到") {
+			return false, nil
+		}
+		return false, fmt.Errorf("查询 Windows 自启动注册表失败: %w, 输出: %s",
+			err, strings.TrimSpace(string(out)))
+	}
+
+	// 2. 验证路径是否匹配当前可执行文件
+	if exePath, exeErr := os.Executable(); exeErr == nil {
+		if resolved, err := filepath.EvalSymlinks(exePath); err == nil {
+			exePath = resolved
+		}
+		exePath = strings.TrimPrefix(exePath, `\\?\`)
+		if !strings.Contains(strings.ToLower(string(out)), strings.ToLower(exePath)) {
+			return false, nil
+		}
+	}
+
+	// 3. 检查 StartupApproved 是否禁用了该项
+	// Windows 10/11 在任务管理器禁用启动项时会在此处写入禁用标记
+	approvedCmd := hideWindowCmd(regExe, "query", windowsStartupApprovedKey, "/v", windowsAutoStartValue)
+	approvedOut, err := approvedCmd.CombinedOutput()
+	if err == nil {
+		// 解析 REG_BINARY 输出，格式类似: "CodeSwitch    REG_BINARY    030000..."
+		// 第一个字节: 02/06=启用, 03=禁用
+		outStr := string(approvedOut)
+		if idx := strings.Index(strings.ToUpper(outStr), "REG_BINARY"); idx != -1 {
+			hexPart := strings.TrimSpace(outStr[idx+len("REG_BINARY"):])
+			// 取第一个空格前的十六进制字符串
+			if spaceIdx := strings.IndexAny(hexPart, " \t\r\n"); spaceIdx != -1 {
+				hexPart = hexPart[:spaceIdx]
+			}
+			// 检查第一个字节是否为 03（禁用）
+			if len(hexPart) >= 2 && strings.ToLower(hexPart[:2]) == "03" {
+				return false, nil // 被系统禁用
+			}
+		}
+	}
+	// StartupApproved 不存在或解析失败时，视为启用（向后兼容）
+
+	return true, nil
 }
 
 func (as *AutoStartService) enableWindows() error {
@@ -70,27 +150,38 @@ func (as *AutoStartService) enableWindows() error {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
 
-	key := `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-	// 【修复】路径需要用双引号包裹，防止路径中含空格时解析失败
-	// 例如：C:\Program Files\CodeSwitch\CodeSwitch.exe
-	quotedPath := fmt.Sprintf(`"%s"`, exePath)
-	cmd := exec.Command("reg", "add", key, "/v", "CodeSwitch", "/t", "REG_SZ", "/d", quotedPath, "/f")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to add registry key: %w", err)
+	if resolved, err := filepath.EvalSymlinks(exePath); err == nil {
+		exePath = resolved
 	}
+	exePath = strings.TrimPrefix(exePath, `\\?\`)
+
+	quotedPath := fmt.Sprintf(`"%s"`, exePath)
+	regExe := windowsRegExe()
+	cmd := hideWindowCmd(regExe, "add", windowsRunKey, "/v", windowsAutoStartValue,
+		"/t", "REG_SZ", "/d", quotedPath, "/f")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to add registry key: %w, output: %s",
+			err, strings.TrimSpace(string(out)))
+	}
+
+	// Windows 10/11: clear StartupApproved disabled state
+	_ = hideWindowCmd(regExe, "delete", windowsStartupApprovedKey, "/v", windowsAutoStartValue, "/f").Run()
 	return nil
 }
 
 func (as *AutoStartService) disableWindows() error {
-	key := `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-	cmd := exec.Command("reg", "delete", key, "/v", "CodeSwitch", "/f")
-	// 忽略不存在的错误
+	regExe := windowsRegExe()
+	cmd := hideWindowCmd(regExe, "delete", windowsRunKey, "/v", windowsAutoStartValue, "/f")
 	_ = cmd.Run()
 	return nil
 }
 
 // macOS 实现
 func (as *AutoStartService) isEnabledDarwin() (bool, error) {
+	if err := as.requireHome(); err != nil {
+		return false, err
+	}
+
 	plistPath := as.getDarwinPlistPath()
 	_, err := os.Stat(plistPath)
 	if os.IsNotExist(err) {
@@ -100,6 +191,10 @@ func (as *AutoStartService) isEnabledDarwin() (bool, error) {
 }
 
 func (as *AutoStartService) enableDarwin() error {
+	if err := as.requireHome(); err != nil {
+		return err
+	}
+
 	exePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %w", err)
@@ -136,6 +231,10 @@ func (as *AutoStartService) enableDarwin() error {
 }
 
 func (as *AutoStartService) disableDarwin() error {
+	if err := as.requireHome(); err != nil {
+		return err
+	}
+
 	plistPath := as.getDarwinPlistPath()
 	// 忽略不存在的错误
 	_ = os.Remove(plistPath)
@@ -143,14 +242,17 @@ func (as *AutoStartService) disableDarwin() error {
 }
 
 func (as *AutoStartService) getDarwinPlistPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "Library", "LaunchAgents", "com.codeswitch.app.plist")
+	return filepath.Join(as.homeDir, "Library", "LaunchAgents", "com.codeswitch.app.plist")
 }
 
 // Linux 实现 (使用 .desktop 文件)
 func (as *AutoStartService) isEnabledLinux() (bool, error) {
-	desktopPath := as.getLinuxDesktopPath()
-	_, err := os.Stat(desktopPath)
+	desktopPath, err := as.getLinuxDesktopPath()
+	if err != nil {
+		return false, err
+	}
+
+	_, err = os.Stat(desktopPath)
 	if os.IsNotExist(err) {
 		return false, nil
 	}
@@ -163,7 +265,11 @@ func (as *AutoStartService) enableLinux() error {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
 
-	desktopPath := as.getLinuxDesktopPath()
+	desktopPath, err := as.getLinuxDesktopPath()
+	if err != nil {
+		return err
+	}
+
 	desktopDir := filepath.Dir(desktopPath)
 	if err := os.MkdirAll(desktopDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create autostart directory: %w", err)
@@ -185,18 +291,30 @@ X-GNOME-Autostart-enabled=true`, exePath)
 }
 
 func (as *AutoStartService) disableLinux() error {
-	desktopPath := as.getLinuxDesktopPath()
+	desktopPath, err := as.getLinuxDesktopPath()
+	if err != nil {
+		return err
+	}
+
 	// 忽略不存在的错误
 	_ = os.Remove(desktopPath)
 	return nil
 }
 
-func (as *AutoStartService) getLinuxDesktopPath() string {
-	home, _ := os.UserHomeDir()
-	// 优先使用 XDG_CONFIG_HOME，如果未设置则使用 ~/.config
+func (as *AutoStartService) getLinuxDesktopPath() (string, error) {
+	// 优先使用 XDG_CONFIG_HOME，如果已设置且为绝对路径则直接使用
 	configHome := os.Getenv("XDG_CONFIG_HOME")
-	if configHome == "" {
-		configHome = filepath.Join(home, ".config")
+	if configHome != "" && !filepath.IsAbs(configHome) {
+		configHome = "" // 防止相对路径导致写入工作目录
 	}
-	return filepath.Join(configHome, "autostart", "codeswitch.desktop")
+
+	// XDG 未设置或无效，回退到 ~/.config
+	if configHome == "" {
+		if err := as.requireHome(); err != nil {
+			return "", err
+		}
+		configHome = filepath.Join(as.homeDir, ".config")
+	}
+
+	return filepath.Join(configHome, "autostart", "codeswitch.desktop"), nil
 }

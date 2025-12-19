@@ -1,13 +1,34 @@
-# Code Switch v0.1.7
+# Code Switch v2.0.0
+
+## 新功能
+- **自定义 CLI 工具支持（Others Tab）**：新增"托管自定义 CLI"功能，支持为任意 AI CLI 工具（如 Droid、RooCode 等）配置代理托管。用户可以自定义配置文件路径、格式（JSON/TOML/ENV）和代理注入字段，实现统一的供应商管理。
+- **多配置文件编辑器**：支持为每个自定义 CLI 工具管理多个配置文件，提供实时编辑、格式校验和一键保存功能。
+
+## 修复
+- **自定义 CLI 代理路由**：修复自定义 CLI 工具的代理路由 `/custom/:toolId/v1/messages`，确保请求正确转发到供应商。
+- **代理注入 URL 格式**：修复代理注入时 URL 路径拼接问题，确保生成正确的 `http://127.0.0.1:18100/custom/{toolId}` 格式。
+- **Windows 路径扩展**：修复 Windows 系统下 `~\` 路径前缀的展开问题，正确识别用户主目录。
+- **前端 toast 提示**：修复创建/更新 CLI 工具后的成功提示显示。
+- **Claude 代理开关状态检测**：修复刷新后 Claude 代理开关显示为关闭的问题。根本原因是 Claude CLI 可能覆盖 `ANTHROPIC_AUTH_TOKEN`，现改为仅检查 `ANTHROPIC_BASE_URL` 是否指向本地代理。
+
+## 技术改进
+- 新增 `CustomCliService` 服务，提供完整的 CRUD 和代理状态管理
+- 前端新增 `CustomCliConfigEditor` 组件，支持多文件编辑和格式校验
+- 中英文国际化支持完善
+
+---
+
+# Code Switch v1.5.4
 
 ## 更新亮点
-- ♻️ **cc-switch 导入更智能**：支持解析 `nmodel_provider` 以及 provider 内的 `name` 字段，即便 TOML 中使用别名也能正确识别 Codex 供应商；成功导入后按钮自动隐藏。
-- 🧩 **首发 provider 不再回弹**：删除 Codex 供应商后不会再被默认配置覆盖，确保用户自定义列表持久生效。
-- 🧠 **技能仓库 UI 修复**：技能仓库表单输入框拉伸、布局收敛，弹层视觉与深浅色模式更协调。
+- 🔧 **彻底修复 Claude 代理开关状态问题**：根本原因是后端 `ProxyStatus` 使用 `map[string]string` 解析 `env`，当配置文件中存在非字符串值时解析失败，导致状态始终返回 `false`。现改用 `map[string]any` 宽容解析。
+- 🔄 **CI 自动同步版本号**：构建时自动从 Git Tag 提取版本号，更新到所有平台配置文件。
+- 📝 **Release 自动提取更新说明**：从 `RELEASE_NOTES.md` 自动提取当前版本的更新内容。
 
-# Code Switch v0.1.6
+# Code Switch v1.5.3
 
 ## 更新亮点
-- 🧠 **Claude Code Skill 管理**：新增技能页面可浏览、安装与卸载 Claude Code Skills，并在同一对话框中维护自定义技能仓库，方便按需扩展技能来源。
-- 🪟 **窗口管理修复**：macOS/Windows 托盘切换到主窗口时会自动聚焦并解除最小化，仅首开时居中，避免频繁重置窗口位置；Windows 还会暂时启用置顶确保焦点正确。
-- 📥 **cc-switch 配置导入**：主页提供 cc-switch 导入按钮，自动读取 `~/.cc-switch/config.json` 中尚未同步的供应商与 MCP 服务器，导入完成后按钮自动隐藏，避免重复操作。
+- 🔧 **代理开关状态持久化修复**：修复了刷新页面后代理开关显示为关闭状态的问题，实际上代理仍在运行。问题根源是 Wails RPC 返回的字段名与前端读取的字段名不一致。
+- ✏️ **CLI 配置预览可编辑**：配置文件预览区域新增解锁编辑功能，用户可以直接修改配置内容，支持 JSON/TOML/ENV 格式自动解析和校验。
+- 🎨 **Tab 按钮左对齐**：Claude Code / Codex / Gemini 三个选择按钮现在与供应商卡片左边缘对齐，视觉更统一。
+- 📖 **README 重写**：完全重写 README 文档，面向小白用户，3 步快速开始，包含常见问题解答。

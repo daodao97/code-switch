@@ -248,6 +248,83 @@
           </button>
         </div>
       </div>
+
+      <!-- 'others' Tab: CLI 工具选择器 -->
+      <div v-if="activeTab === 'others'" class="cli-tool-selector">
+        <div class="tool-selector-row">
+          <select
+            v-model="selectedToolId"
+            class="tool-select"
+            @change="onToolSelect"
+          >
+            <option v-if="customCliTools.length === 0" value="" disabled>
+              {{ t('components.main.customCli.noTools') }}
+            </option>
+            <option
+              v-for="tool in customCliTools"
+              :key="tool.id"
+              :value="tool.id"
+            >
+              {{ tool.name }}
+            </option>
+          </select>
+          <button
+            class="ghost-icon add-tool-btn"
+            :data-tooltip="t('components.main.customCli.addTool')"
+            @click="openCliToolModal"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M12 5v14M5 12h14"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                fill="none"
+              />
+            </svg>
+          </button>
+          <button
+            v-if="selectedToolId"
+            class="ghost-icon"
+            :data-tooltip="t('components.main.form.editTitle')"
+            @click="editCurrentCliTool"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M11.983 2.25a1.125 1.125 0 011.077.81l.563 2.101a7.482 7.482 0 012.326 1.343l2.08-.621a1.125 1.125 0 011.356.651l1.313 3.207a1.125 1.125 0 01-.442 1.339l-1.86 1.205a7.418 7.418 0 010 2.686l1.86 1.205a1.125 1.125 0 01.442 1.339l-1.313 3.207a1.125 1.125 0 01-1.356.651l-2.08-.621a7.482 7.482 0 01-2.326 1.343l-.563 2.101a1.125 1.125 0 01-1.077.81h-2.634a1.125 1.125 0 01-1.077-.81l-.563-2.101a7.482 7.482 0 01-2.326-1.343l-2.08.621a1.125 1.125 0 01-1.356-.651l-1.313-3.207a1.125 1.125 0 01.442-1.339l1.86-1.205a7.418 7.418 0 010-2.686l-1.86-1.205a1.125 1.125 0 01-.442-1.339l1.313-3.207a1.125 1.125 0 011.356-.651l2.08.621a7.482 7.482 0 012.326-1.343l.563-2.101a1.125 1.125 0 011.077-.81h2.634z"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+              <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </button>
+          <button
+            v-if="selectedToolId"
+            class="ghost-icon"
+            :data-tooltip="t('components.main.form.actions.delete')"
+            @click="deleteCurrentCliTool"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M9 3h6m-7 4h8m-6 0v11m4-11v11M5 7h14l-.867 12.138A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.862L5 7z"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+        </div>
+        <p v-if="customCliTools.length === 0" class="no-tools-hint">
+          {{ t('components.main.customCli.noTools') }} - {{ t('components.main.customCli.addTool') }}
+        </p>
+      </div>
+
       <div class="automation-list" @dragover.prevent>
         <article
           v-for="card in activeCards"
@@ -286,9 +363,16 @@
             <div class="card-text">
               <div class="card-title-row">
                 <p class="card-title">{{ card.name }}</p>
+                <!-- 当前使用徽章 -->
+                <span
+                  v-if="isDirectApplied(card) && !activeProxyState"
+                  class="current-use-badge"
+                >
+                  {{ t('components.main.directApply.currentBadge') }}
+                </span>
                 <!-- 连通性状态指示器 -->
                 <span
-                  v-if="card.connectivityCheck"
+                  v-if="card.availabilityMonitorEnabled"
                   class="connectivity-dot"
                   :class="getConnectivityIndicatorClass(card.id)"
                   :title="getConnectivityTooltip(card.id)"
@@ -408,6 +492,20 @@
               <input type="checkbox" v-model="card.enabled" @change="persistProviders(activeTab)" />
               <span></span>
             </label>
+            <!-- 直连应用按钮 -->
+            <button
+              v-if="activeTab !== 'others'"
+              class="ghost-icon direct-apply-btn"
+              :class="{ 'is-active': isDirectApplied(card) && !activeProxyState }"
+              :disabled="activeProxyState"
+              :title="activeProxyState ? t('components.main.directApply.proxyEnabled') : (isDirectApplied(card) ? t('components.main.directApply.inUse') : t('components.main.directApply.title'))"
+              @click.stop="!isDirectApplied(card) && handleDirectApply(card)"
+            >
+              <span v-if="isDirectApplied(card) && !activeProxyState" class="apply-text">{{ t('components.main.directApply.inUse') }}</span>
+              <svg v-else viewBox="0 0 24 24" aria-hidden="true" class="lightning-icon">
+                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
             <button class="ghost-icon" @click="configure(card)">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path
@@ -448,6 +546,15 @@
           </div>
         </article>
       </div>
+
+      <!-- 自定义 CLI 工具配置文件编辑器 -->
+      <CustomCliConfigEditor
+        v-if="activeTab === 'others' && selectedToolId && selectedCustomCliTool"
+        :tool-id="selectedToolId"
+        :tool-name="selectedCustomCliTool.name"
+        :config-files="selectedCustomCliTool.configFiles"
+        @saved="onConfigFileSaved"
+      />
       </section>
 
       <BaseModal
@@ -500,6 +607,53 @@
                     :placeholder="t('components.main.form.placeholders.apiKey')"
                   />
                 </label>
+
+                <!-- API 端点（可选）-->
+                <label class="form-field">
+                  <span>{{ t('components.main.form.labels.apiEndpoint') }}</span>
+                  <BaseInput
+                    v-model="modalState.form.apiEndpoint"
+                    type="text"
+                    :placeholder="t('components.main.form.placeholders.apiEndpoint')"
+                  />
+                  <span class="field-hint">{{ t('components.main.form.hints.apiEndpoint') }}</span>
+                </label>
+
+                <!-- 认证方式 -->
+                <div class="form-field">
+                  <span>{{ t('components.main.form.labels.connectivityAuthType') }}</span>
+                  <Listbox v-model="selectedAuthType" v-slot="{ open }">
+                    <div class="level-select">
+                      <ListboxButton class="level-select-button">
+                        <span class="level-label">
+                          {{ authTypeOptions.find((item) => item.value === selectedAuthType)?.label || selectedAuthType }}
+                        </span>
+                        <svg viewBox="0 0 20 20" aria-hidden="true">
+                          <path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+                        </svg>
+                      </ListboxButton>
+                      <ListboxOptions v-if="open" class="level-select-options">
+                        <ListboxOption
+                          v-for="option in authTypeOptions"
+                          :key="option.value"
+                          :value="option.value"
+                          v-slot="{ active, selected }"
+                        >
+                          <div :class="['level-option', { active, selected }]">
+                            <span class="level-name">{{ option.label }}</span>
+                          </div>
+                        </ListboxOption>
+                      </ListboxOptions>
+                    </div>
+                  </Listbox>
+                  <BaseInput
+                    v-model="customAuthHeader"
+                    type="text"
+                    :placeholder="t('components.main.form.placeholders.customAuthHeader')"
+                    class="mt-2"
+                  />
+                  <span class="field-hint">{{ t('components.main.form.hints.connectivityAuthType') }}</span>
+                </div>
 
                 <div class="form-field">
                   <span>{{ t('components.main.form.labels.icon') }}</span>
@@ -574,6 +728,10 @@
                   <CLIConfigEditor
                     :platform="activeTab as CLIPlatform"
                     v-model="modalState.form.cliConfig"
+                    :provider-config="{
+                      apiKey: modalState.form.apiKey,
+                      baseUrl: modalState.form.apiUrl
+                    }"
                   />
                 </div>
 
@@ -590,83 +748,41 @@
                   </div>
                 </div>
 
+                <!-- 可用性监控配置 -->
                 <div class="form-field switch-field">
-                  <span>{{ t('components.main.form.labels.connectivityCheck') }}</span>
+                  <span>{{ t('components.main.form.labels.availabilityMonitor') }}</span>
                   <div class="switch-inline">
                     <label class="mac-switch">
-                      <input type="checkbox" v-model="modalState.form.connectivityCheck" />
+                      <input type="checkbox" v-model="modalState.form.availabilityMonitorEnabled" />
                       <span></span>
                     </label>
                     <span class="switch-text">
-                      {{ modalState.form.connectivityCheck ? t('components.main.form.switch.on') : t('components.main.form.switch.off') }}
+                      {{ modalState.form.availabilityMonitorEnabled ? t('components.main.form.switch.on') : t('components.main.form.switch.off') }}
                     </span>
                   </div>
-                  <span class="field-hint">{{ t('components.main.form.hints.connectivityCheck') }}</span>
+                  <span class="field-hint">{{ t('components.main.form.hints.availabilityMonitor') }}</span>
                 </div>
 
-                <div v-if="modalState.form.connectivityCheck" class="form-field">
-                  <span>{{ t('components.main.form.labels.connectivityTestModel') }}</span>
-                  <div class="model-select-combo">
-                    <select
-                      v-model="modalState.form.connectivityTestModel"
-                      class="model-select"
-                    >
-                      <option value="">{{ t('components.main.form.placeholders.connectivityTestModel') }}</option>
-                      <option v-for="model in connectivityTestModelOptions" :key="model" :value="model">
-                        {{ model }}
-                      </option>
-                    </select>
-                    <BaseInput
-                      v-model="modalState.form.connectivityTestModel"
-                      :placeholder="t('components.main.form.placeholders.customModel')"
-                      class="model-input"
-                    />
+                <!-- 连通性自动拉黑 -->
+                <div v-if="modalState.form.availabilityMonitorEnabled" class="form-field switch-field">
+                  <span>{{ t('components.main.form.labels.connectivityAutoBlacklist') }}</span>
+                  <div class="switch-inline">
+                    <label class="mac-switch">
+                      <input type="checkbox" v-model="modalState.form.connectivityAutoBlacklist" />
+                      <span></span>
+                    </label>
+                    <span class="switch-text">
+                      {{ modalState.form.connectivityAutoBlacklist ? t('components.main.form.switch.on') : t('components.main.form.switch.off') }}
+                    </span>
                   </div>
-                  <span class="field-hint">{{ t('components.main.form.hints.connectivityTestModel') }}</span>
+                  <span class="field-hint">{{ t('components.main.form.hints.connectivityAutoBlacklist') }}</span>
                 </div>
 
-                <!-- 测试端点 -->
-                <div v-if="modalState.form.connectivityCheck" class="form-field">
-                  <span>{{ t('components.main.form.labels.connectivityTestEndpoint') }}</span>
-                  <div class="model-select-combo">
-                    <select v-model="modalState.form.connectivityTestEndpoint" class="model-select">
-                      <option v-for="opt in connectivityEndpointOptions" :key="opt.value" :value="opt.value">
-                        {{ opt.label }}
-                      </option>
-                    </select>
-                    <BaseInput
-                      v-model="modalState.form.connectivityTestEndpoint"
-                      :placeholder="t('components.main.form.placeholders.customEndpoint')"
-                      class="model-input"
-                    />
-                  </div>
-                  <span class="field-hint">{{ t('components.main.form.hints.connectivityTestEndpoint') }}</span>
-                </div>
-
-                <!-- 认证方式 -->
-                <div v-if="modalState.form.connectivityCheck" class="form-field">
-                  <span>{{ t('components.main.form.labels.connectivityAuthType') }}</span>
-                  <select v-model="modalState.form.connectivityAuthType" class="model-select">
-                    <option value="x-api-key">x-api-key (Anthropic)</option>
-                    <option value="bearer">Authorization: Bearer (OpenAI)</option>
-                  </select>
-                  <span class="field-hint">{{ t('components.main.form.hints.connectivityAuthType') }}</span>
-                </div>
-
-                <!-- 测试按钮 -->
-                <div v-if="modalState.form.connectivityCheck" class="form-field">
-                  <button
-                    type="button"
-                    class="test-connectivity-btn"
-                    :disabled="testingConnectivity || !modalState.form.apiUrl || !modalState.form.apiKey"
-                    @click="handleTestConnectivity"
-                  >
-                    <span v-if="testingConnectivity" class="btn-spinner"></span>
-                    <span>{{ testingConnectivity ? t('components.main.form.actions.testing') : t('components.main.form.actions.testConnectivity') }}</span>
-                  </button>
-                  <div v-if="connectivityTestResult" class="test-result" :class="connectivityTestResult.success ? 'success' : 'error'">
-                    {{ connectivityTestResult.message }}
-                  </div>
+                <!-- 高级配置提示 -->
+                <div v-if="modalState.form.availabilityMonitorEnabled" class="form-field">
+                  <span class="field-hint" style="color: #6b7280;">
+                    💡 {{ t('components.main.form.hints.availabilityAdvancedConfig') }}
+                  </span>
                 </div>
 
                 <footer class="form-actions">
@@ -699,6 +815,160 @@
         </BaseButton>
       </footer>
       </BaseModal>
+
+      <!-- CLI 工具配置模态框 -->
+      <BaseModal
+        :open="cliToolModalState.open"
+        :title="cliToolModalState.editingId ? t('components.main.customCli.editTitle') : t('components.main.customCli.createTitle')"
+        @close="closeCliToolModal"
+      >
+        <form class="vendor-form cli-tool-form" @submit.prevent="submitCliToolModal">
+          <label class="form-field">
+            <span>{{ t('components.main.customCli.toolName') }}</span>
+            <BaseInput
+              v-model="cliToolModalState.form.name"
+              type="text"
+              :placeholder="t('components.main.customCli.toolNamePlaceholder')"
+              required
+            />
+          </label>
+
+          <!-- 配置文件列表 -->
+          <div class="form-field">
+            <div class="field-header">
+              <span>{{ t('components.main.customCli.configFiles') }}</span>
+              <button type="button" class="add-btn" @click="addConfigFile">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none" />
+                </svg>
+              </button>
+            </div>
+            <div class="config-files-list">
+              <div
+                v-for="(cf, idx) in cliToolModalState.form.configFiles"
+                :key="cf.id"
+                class="config-file-item"
+              >
+                <div class="config-file-row">
+                  <BaseInput
+                    v-model="cf.label"
+                    class="config-label-input"
+                    :placeholder="t('components.main.customCli.labelPlaceholder')"
+                  />
+                  <select v-model="cf.format" class="config-format-select">
+                    <option value="json">JSON</option>
+                    <option value="toml">TOML</option>
+                    <option value="env">ENV</option>
+                  </select>
+                  <label class="primary-checkbox">
+                    <input type="checkbox" v-model="cf.isPrimary" />
+                    <span>{{ t('components.main.customCli.primary') }}</span>
+                  </label>
+                  <button
+                    type="button"
+                    class="remove-btn"
+                    :disabled="cliToolModalState.form.configFiles.length <= 1"
+                    @click="removeConfigFile(idx)"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M6 18L18 6M6 6l12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none" />
+                    </svg>
+                  </button>
+                </div>
+                <BaseInput
+                  v-model="cf.path"
+                  class="config-path-input"
+                  :placeholder="t('components.main.customCli.pathPlaceholder')"
+                />
+              </div>
+            </div>
+          </div>
+
+          <!-- 代理注入配置 -->
+          <div class="form-field">
+            <div class="field-header">
+              <span>{{ t('components.main.customCli.proxySettings') }}</span>
+              <button type="button" class="add-btn" @click="addProxyInjection">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none" />
+                </svg>
+              </button>
+            </div>
+            <div class="proxy-injection-list">
+              <div
+                v-for="(pi, idx) in cliToolModalState.form.proxyInjection"
+                :key="idx"
+                class="proxy-injection-item"
+              >
+                <div class="proxy-injection-row">
+                  <select v-model="pi.targetFileId" class="target-file-select">
+                    <option value="">{{ t('components.main.customCli.selectConfigFile') }}</option>
+                    <option
+                      v-for="cf in cliToolModalState.form.configFiles"
+                      :key="cf.id"
+                      :value="cf.id"
+                    >
+                      {{ cf.label || cf.path || t('components.main.customCli.unnamed') }}
+                    </option>
+                  </select>
+                  <button
+                    type="button"
+                    class="remove-btn"
+                    :disabled="cliToolModalState.form.proxyInjection.length <= 1"
+                    @click="removeProxyInjection(idx)"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M6 18L18 6M6 6l12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none" />
+                    </svg>
+                  </button>
+                </div>
+                <div class="proxy-fields-row">
+                  <BaseInput
+                    v-model="pi.baseUrlField"
+                    class="proxy-field-input"
+                    :placeholder="t('components.main.customCli.baseUrlFieldPlaceholder')"
+                  />
+                  <BaseInput
+                    v-model="pi.authTokenField"
+                    class="proxy-field-input"
+                    :placeholder="t('components.main.customCli.authTokenFieldPlaceholder')"
+                  />
+                </div>
+              </div>
+            </div>
+            <p class="field-hint">{{ t('components.main.customCli.proxyHint') }}</p>
+          </div>
+
+          <footer class="form-actions">
+            <BaseButton variant="outline" type="button" @click="closeCliToolModal">
+              {{ t('components.main.form.actions.cancel') }}
+            </BaseButton>
+            <BaseButton type="submit">
+              {{ t('components.main.form.actions.save') }}
+            </BaseButton>
+          </footer>
+        </form>
+      </BaseModal>
+
+      <!-- CLI 工具删除确认框 -->
+      <BaseModal
+        :open="cliToolConfirmState.open"
+        :title="t('components.main.customCli.deleteTitle')"
+        variant="confirm"
+        @close="closeCliToolConfirm"
+      >
+        <div class="confirm-body">
+          <p>{{ t('components.main.customCli.deleteMessage', { name: cliToolConfirmState.tool?.name ?? '' }) }}</p>
+        </div>
+        <footer class="form-actions confirm-actions">
+          <BaseButton variant="outline" type="button" @click="closeCliToolConfirm">
+            {{ t('components.main.form.actions.cancel') }}
+          </BaseButton>
+          <BaseButton variant="danger" type="button" @click="confirmDeleteCliTool">
+            {{ t('components.main.form.actions.delete') }}
+          </BaseButton>
+        </footer>
+      </BaseModal>
     </div>
   </div>
 </template>
@@ -724,6 +994,7 @@ import BaseInput from '../common/BaseInput.vue'
 import ModelWhitelistEditor from '../common/ModelWhitelistEditor.vue'
 import ModelMappingEditor from '../common/ModelMappingEditor.vue'
 import CLIConfigEditor from '../common/CLIConfigEditor.vue'
+import CustomCliConfigEditor from '../common/CustomCliConfigEditor.vue'
 import { LoadProviders, SaveProviders, DuplicateProvider } from '../../../bindings/codeswitch/services/providerservice'
 import { GetProviders as GetGeminiProviders, UpdateProvider as UpdateGeminiProvider, AddProvider as AddGeminiProvider, DeleteProvider as DeleteGeminiProvider, ReorderProviders as ReorderGeminiProviders } from '../../../bindings/codeswitch/services/geminiservice'
 import { fetchProxyStatus, enableProxy, disableProxy } from '../../services/claudeSettings'
@@ -736,8 +1007,21 @@ import { getCurrentTheme, setTheme, type ThemeMode } from '../../utils/ThemeMana
 import { useRouter } from 'vue-router'
 import { fetchConfigImportStatus, importFromCcSwitch, isFirstRun, markFirstRunDone, type ConfigImportStatus } from '../../services/configImport'
 import { showToast } from '../../utils/toast'
+import { extractErrorMessage } from '../../utils/error'
 import { getBlacklistStatus, manualUnblock, type BlacklistStatus } from '../../services/blacklist'
 import { saveCLIConfig, type CLIPlatform } from '../../services/cliConfig'
+import {
+  listCustomCliTools,
+  createCustomCliTool,
+  updateCustomCliTool,
+  deleteCustomCliTool,
+  getCustomCliProxyStatus,
+  enableCustomCliProxy,
+  disableCustomCliProxy,
+  type CustomCliTool,
+  type ConfigFile,
+  type ProxyInjection,
+} from '../../services/customCliService'
 import {
   getConnectivityResults,
   StatusAvailable,
@@ -747,6 +1031,11 @@ import {
   getStatusColorClass,
   type ConnectivityResult,
 } from '../../services/connectivity'
+import {
+  getLatestResults,
+  HealthStatus,
+  type ProviderTimeline,
+} from '../../services/healthcheck'
 
 const { t, locale } = useI18n()
 const router = useRouter()
@@ -769,27 +1058,93 @@ const proxyStates = reactive<Record<ProviderTab, boolean>>({
   claude: false,
   codex: false,
   gemini: false,
+  others: false,
 })
 const proxyBusy = reactive<Record<ProviderTab, boolean>>({
   claude: false,
   codex: false,
   gemini: false,
+  others: false,
 })
+
+// 直连应用状态
+const directAppliedIds = reactive<Record<ProviderTab, string | number | null>>({
+  claude: null,
+  codex: null,
+  gemini: null,
+  others: null,
+})
+
+const refreshDirectAppliedStatus = async (tab: ProviderTab = activeTab.value) => {
+  if (tab === 'others') return
+
+  try {
+    let id: string | number | null = null
+    if (tab === 'claude') {
+      id = await Call.ByName('codeswitch/services.ClaudeSettingsService.GetDirectAppliedProviderID')
+    } else if (tab === 'codex') {
+      id = await Call.ByName('codeswitch/services.CodexSettingsService.GetDirectAppliedProviderID')
+    } else if (tab === 'gemini') {
+      id = await Call.ByName('codeswitch/services.GeminiService.GetDirectAppliedProviderID')
+    }
+    directAppliedIds[tab] = id
+  } catch (error) {
+    console.error(`Failed to get direct applied status for ${tab}`, error)
+  }
+}
+
+const handleDirectApply = async (card: AutomationCard) => {
+  if (activeProxyState.value) return
+  const tab = activeTab.value
+  try {
+    if (tab === 'claude') {
+      await Call.ByName('codeswitch/services.ClaudeSettingsService.ApplySingleProvider', card.id)
+    } else if (tab === 'codex') {
+      await Call.ByName('codeswitch/services.CodexSettingsService.ApplySingleProvider', card.id)
+    } else if (tab === 'gemini') {
+      // Gemini 使用字符串 ID，需要从 cache 中找到原始 provider
+      const index = cards.gemini.findIndex(c => c.id === card.id)
+      if (index === -1 || !geminiProvidersCache.value[index]) return
+      const realId = geminiProvidersCache.value[index].id
+      await Call.ByName('codeswitch/services.GeminiService.ApplySingleProvider', realId)
+    }
+    await refreshDirectAppliedStatus(tab)
+    showToast(t('components.main.directApply.success', { name: card.name }), 'success')
+  } catch (error) {
+    console.error('Direct apply failed', error)
+    showToast(t('components.main.directApply.failed'), 'error')
+  }
+}
+
+const isDirectApplied = (card: AutomationCard) => {
+  const appliedId = directAppliedIds[activeTab.value]
+  if (appliedId === null) return false
+
+  if (activeTab.value === 'gemini') {
+    const index = cards.gemini.findIndex(c => c.id === card.id)
+    if (index === -1 || !geminiProvidersCache.value[index]) return false
+    return geminiProvidersCache.value[index].id === appliedId
+  }
+  return card.id === appliedId
+}
 
 const providerStatsMap = reactive<Record<ProviderTab, Record<string, ProviderDailyStat>>>({
   claude: {},
   codex: {},
   gemini: {},
+  others: {},
 })
 const providerStatsLoading = reactive<Record<ProviderTab, boolean>>({
   claude: false,
   codex: false,
   gemini: false,
+  others: false,
 })
 const providerStatsLoaded = reactive<Record<ProviderTab, boolean>>({
   claude: false,
   codex: false,
   gemini: false,
+  others: false,
 })
 let providerStatsTimer: number | undefined
 let updateTimer: number | undefined
@@ -804,19 +1159,46 @@ const importStatus = ref<ConfigImportStatus | null>(null)
 const importBusy = ref(false)
 const showFirstRunPrompt = ref(false)
 
+// 自定义 CLI 工具状态
+const customCliTools = ref<CustomCliTool[]>([])
+const selectedToolId = ref<string | null>(null)
+const customCliProxyStates = reactive<Record<string, boolean>>({})  // toolId -> enabled
+
+// 当前选中的 CLI 工具（计算属性）
+const selectedCustomCliTool = computed(() => {
+  if (!selectedToolId.value) return null
+  return customCliTools.value.find(t => t.id === selectedToolId.value) || null
+})
+
+// 配置文件保存成功后的回调
+const onConfigFileSaved = () => {
+  // 配置文件保存成功，可以在这里添加额外逻辑（如刷新状态）
+  console.log('[CustomCliConfigEditor] Config file saved')
+}
+
 // 黑名单状态
 const blacklistStatusMap = reactive<Record<ProviderTab, Record<string, BlacklistStatus>>>({
   claude: {},
   codex: {},
   gemini: {},
+  others: {},
 })
 let blacklistTimer: number | undefined
 
-// 连通性状态
+// 连通性状态（已废弃，保留用于兼容）
 const connectivityResultsMap = reactive<Record<ProviderTab, Record<number, ConnectivityResult>>>({
   claude: {},
   codex: {},
   gemini: {},
+  others: {},
+})
+
+// 可用性监控状态（新）
+const availabilityResultsMap = reactive<Record<ProviderTab, Record<number, ProviderTimeline>>>({
+  claude: {},
+  codex: {},
+  gemini: {},
+  others: {},
 })
 
 // 最后使用的供应商（用于高亮显示）
@@ -830,6 +1212,7 @@ const lastUsedProviders = reactive<Record<string, LastUsedProvider | null>>({
   claude: null,
   codex: null,
   gemini: null,
+  others: null,
 })
 // 高亮闪烁的供应商名称
 const highlightedProvider = ref<string | null>(null)
@@ -1014,6 +1397,8 @@ const loadAppSettings = async () => {
     console.error('failed to load app settings', error)
     showHeatmap.value = true
     showHomeTitle.value = true
+    // 加载应用设置失败时提示用户
+    showToast(t('components.main.errors.loadAppSettingsFailed'), 'warning')
   }
 }
 
@@ -1102,6 +1487,8 @@ const loadUsageHeatmap = async () => {
 		usageHeatmap.value = buildUsageHeatmapMatrix(stats, HEATMAP_DAYS)
 	} catch (error) {
 		console.error('Failed to load usage heatmap stats', error)
+		// 加载热力图失败时提示用户
+		showToast(t('components.main.errors.loadHeatmapFailed'), 'warning')
 	}
 }
 
@@ -1127,6 +1514,7 @@ const tabs = [
   { id: 'claude', label: 'Claude Code' },
   { id: 'codex', label: 'Codex' },
   { id: 'gemini', label: 'Gemini' },
+  { id: 'others', label: '其他' },
 ] as const
 type ProviderTab = (typeof tabs)[number]['id']
 const providerTabIds = tabs.map((tab) => tab.id) as ProviderTab[]
@@ -1135,6 +1523,7 @@ const cards = reactive<Record<ProviderTab, AutomationCard[]>>({
   claude: createAutomationCards(automationCardGroups.claude),
   codex: createAutomationCards(automationCardGroups.codex),
   gemini: [],
+  others: [],
 })
 const draggingId = ref<number | null>(null)
 
@@ -1149,7 +1538,11 @@ const geminiToCard = (provider: GeminiProvider, index: number): AutomationCard =
   tint: 'rgba(251, 146, 60, 0.18)',
   accent: '#fb923c',
   enabled: provider.enabled,
-  level: provider.level || 1, // 保持 Level 字段
+  level: provider.level || 1,
+  // 可用性监控配置（Gemini 暂不支持，使用默认值）
+  availabilityMonitorEnabled: false,
+  connectivityAutoBlacklist: false,
+  availabilityConfig: undefined,
 })
 
 // AutomationCard 到 Gemini Provider 的转换
@@ -1160,17 +1553,47 @@ const cardToGemini = (card: AutomationCard, original: GeminiProvider): GeminiPro
   apiKey: card.apiKey,
   websiteUrl: card.officialSite,
   enabled: card.enabled,
-  level: card.level || 1, // 保持 Level 字段
+  level: card.level || 1,
+  // 注意：Gemini 不支持可用性监控配置，这些字段不会保存
 })
 
-const serializeProviders = (providers: AutomationCard[]) => providers.map((provider) => ({ ...provider }))
+const serializeProviders = (providers: AutomationCard[]) =>
+  providers.map((provider) => ({
+    ...provider,
+    // 确保可用性配置正确序列化
+    availabilityMonitorEnabled: !!provider.availabilityMonitorEnabled,
+    connectivityAutoBlacklist: !!provider.connectivityAutoBlacklist,
+    availabilityConfig: provider.availabilityConfig
+      ? {
+          testModel: provider.availabilityConfig.testModel || '',
+          testEndpoint: provider.availabilityConfig.testEndpoint || '',
+          timeout: provider.availabilityConfig.timeout || 15000,
+        }
+      : undefined,
+    // 清除旧连通性字段（避免再次写入配置文件）
+    connectivityCheck: false,
+    connectivityTestModel: '',
+    connectivityTestEndpoint: '',
+    // 保留认证方式配置（已从废弃字段升级为活跃字段）
+    connectivityAuthType: provider.connectivityAuthType || '',
+  }))
+
+// 生成 custom CLI 工具的 provider kind（后端需要 "custom:{toolId}" 格式）
+const getCustomProviderKind = (toolId: string): string => `custom:${toolId}`
 
 // 存储 Gemini 原始数据，用于转换回去
 const geminiProvidersCache = ref<GeminiProvider[]>([])
 
 const persistProviders = async (tabId: ProviderTab) => {
   try {
-    if (tabId === 'gemini') {
+    if (tabId === 'others') {
+      // 'others' Tab 需要使用 "custom:{toolId}" 格式
+      if (!selectedToolId.value) {
+        showToast(t('components.main.customCli.selectToolFirst'), 'error')
+        return
+      }
+      await SaveProviders(getCustomProviderKind(selectedToolId.value), serializeProviders(cards.others))
+    } else if (tabId === 'gemini') {
       // Gemini 使用独立的保存逻辑
       // 1. 收集当前卡片的 name 集合
       const currentNames = new Set(cards.gemini.map(c => c.name))
@@ -1236,7 +1659,10 @@ const replaceProviders = (tabId: ProviderTab, data: AutomationCard[]) => {
 const loadProvidersFromDisk = async () => {
   for (const tab of providerTabIds) {
     try {
-      if (tab === 'gemini') {
+      if (tab === 'others') {
+        // 'others' Tab: 先加载自定义 CLI 工具列表，再加载每个工具的 providers
+        await loadCustomCliTools()
+      } else if (tab === 'gemini') {
         // Gemini 使用独立的加载逻辑
         const geminiProviders = await GetGeminiProviders()
         geminiProvidersCache.value = geminiProviders
@@ -1253,7 +1679,60 @@ const loadProvidersFromDisk = async () => {
       }
     } catch (error) {
       console.error('Failed to load providers', error)
+      // 加载供应商失败时提示用户
+      showToast(t('components.main.errors.loadProvidersFailed', { tab }), 'error')
     }
+  }
+}
+
+// 加载自定义 CLI 工具列表
+const loadCustomCliTools = async () => {
+  try {
+    const tools = await listCustomCliTools()
+    customCliTools.value = tools
+
+    // 自动选择第一个工具（如果有）
+    if (tools.length > 0 && !selectedToolId.value) {
+      selectedToolId.value = tools[0].id
+    }
+
+    // 为每个工具加载代理状态
+    for (const tool of tools) {
+      try {
+        const status = await getCustomCliProxyStatus(tool.id)
+        customCliProxyStates[tool.id] = Boolean(status?.enabled)
+      } catch (err) {
+        customCliProxyStates[tool.id] = false
+      }
+    }
+
+    // 如果当前选中了工具，更新 'others' Tab 的代理状态并加载 providers
+    if (selectedToolId.value) {
+      proxyStates.others = customCliProxyStates[selectedToolId.value] ?? false
+      await loadCustomCliProviders(selectedToolId.value)
+    }
+  } catch (error) {
+    console.error('Failed to load custom CLI tools', error)
+    customCliTools.value = []
+  }
+}
+
+// 加载特定 CLI 工具的 providers
+const loadCustomCliProviders = async (toolId: string) => {
+  if (!toolId) return
+  try {
+    const kind = getCustomProviderKind(toolId)
+    const saved = await LoadProviders(kind)
+    if (Array.isArray(saved)) {
+      cards.others.splice(0, cards.others.length, ...createAutomationCards(saved as AutomationCard[]))
+      sortProvidersByLevel(cards.others)
+    } else {
+      // 如果没有保存的数据，清空列表
+      cards.others.splice(0, cards.others.length)
+    }
+  } catch (error) {
+    console.error(`Failed to load providers for tool ${toolId}`, error)
+    cards.others.splice(0, cards.others.length)
   }
 }
 
@@ -1296,7 +1775,16 @@ const goToImportSettings = async () => {
 
 const refreshProxyState = async (tab: ProviderTab) => {
   try {
-    if (tab === 'gemini') {
+    if (tab === 'others') {
+      // 'others' Tab 的代理状态依赖于选中的 CLI 工具
+      if (selectedToolId.value) {
+        const status = await getCustomCliProxyStatus(selectedToolId.value)
+        customCliProxyStates[selectedToolId.value] = Boolean(status?.enabled)
+        proxyStates[tab] = Boolean(status?.enabled)
+      } else {
+        proxyStates[tab] = false
+      }
+    } else if (tab === 'gemini') {
       const status = await fetchGeminiProxyStatus()
       proxyStates[tab] = Boolean(status?.enabled)
     } else {
@@ -1315,7 +1803,19 @@ const onProxyToggle = async () => {
   proxyBusy[tab] = true
   const nextState = !proxyStates[tab]
   try {
-    if (tab === 'gemini') {
+    if (tab === 'others') {
+      // 'others' Tab 需要选中工具才能切换代理
+      if (!selectedToolId.value) {
+        showToast(t('components.main.customCli.selectToolFirst'), 'error')
+        return
+      }
+      if (nextState) {
+        await enableCustomCliProxy(selectedToolId.value)
+      } else {
+        await disableCustomCliProxy(selectedToolId.value)
+      }
+      customCliProxyStates[selectedToolId.value] = nextState
+    } else if (tab === 'gemini') {
       if (nextState) {
         await enableGeminiProxy()
       } else {
@@ -1337,6 +1837,12 @@ const onProxyToggle = async () => {
 }
 
 const loadProviderStats = async (tab: ProviderTab) => {
+  // 'others' Tab 暂不加载统计数据（自定义 CLI 工具统计需要后续实现）
+  if (tab === 'others') {
+    providerStatsLoaded[tab] = true
+    return
+  }
+
   providerStatsLoading[tab] = true
   try {
     // Gemini 统计数据目前通过相同的日志接口，直接查询
@@ -1359,6 +1865,11 @@ const loadProviderStats = async (tab: ProviderTab) => {
 
 // 加载黑名单状态
 const loadBlacklistStatus = async (tab: ProviderTab) => {
+  // 'others' Tab 暂不加载黑名单状态
+  if (tab === 'others') {
+    return
+  }
+
   try {
     const statuses = await getBlacklistStatus(tab)
     const map: Record<string, BlacklistStatus> = {}
@@ -1410,8 +1921,13 @@ const getProviderBlacklistStatus = (providerName: string): BlacklistStatus | nul
   return blacklistStatusMap[activeTab.value][providerName] || null
 }
 
-// 加载连通性测试结果
+// 加载连通性测试结果（已废弃，保留兼容）
 const loadConnectivityResults = async (tab: ProviderTab) => {
+  // 'others' Tab 暂不加载连通性结果
+  if (tab === 'others') {
+    return
+  }
+
   try {
     const results = await getConnectivityResults(tab)
     const map: Record<number, ConnectivityResult> = {}
@@ -1424,33 +1940,78 @@ const loadConnectivityResults = async (tab: ProviderTab) => {
   }
 }
 
-// 获取 provider 连通性状态
+// 加载可用性监控结果（新）
+const loadAvailabilityResults = async () => {
+  try {
+    const allResults = await getLatestResults()
+
+    // 转换为按平台和 ID 索引的格式
+    for (const platform of Object.keys(allResults)) {
+      const timelines = allResults[platform] || []
+      const map: Record<number, ProviderTimeline> = {}
+      timelines.forEach((timeline) => {
+        map[timeline.providerId] = timeline
+      })
+      availabilityResultsMap[platform as ProviderTab] = map
+    }
+  } catch (err) {
+    console.error('加载可用性监控结果失败:', err)
+  }
+}
+
+// 获取 provider 连通性状态（已废弃）
 const getProviderConnectivityResult = (providerId: number): ConnectivityResult | null => {
   return connectivityResultsMap[activeTab.value][providerId] || null
 }
 
-// 获取连通性状态指示器样式
-const getConnectivityIndicatorClass = (providerId: number): string => {
-  const result = getProviderConnectivityResult(providerId)
-  if (!result) return 'connectivity-gray'
-  return getStatusColorClass(result.status)
+// 获取 provider 可用性状态（新）
+const getProviderAvailabilityResult = (providerId: number): ProviderTimeline | null => {
+  return availabilityResultsMap[activeTab.value][providerId] || null
 }
 
-// 获取连通性状态提示文本
+// 获取连通性状态指示器样式（改用可用性监控结果）
+const getConnectivityIndicatorClass = (providerId: number): string => {
+  const result = getProviderAvailabilityResult(providerId)
+  if (!result || !result.latest) return 'connectivity-gray'
+
+  // 根据可用性监控状态返回样式
+  switch (result.latest.status) {
+    case HealthStatus.OPERATIONAL:
+      return 'connectivity-green'
+    case HealthStatus.DEGRADED:
+      return 'connectivity-yellow'
+    case HealthStatus.FAILED:
+    case HealthStatus.VALIDATION_ERROR:
+      return 'connectivity-red'
+    default:
+      return 'connectivity-gray'
+  }
+}
+
+// 获取连通性状态提示文本（改用可用性监控结果）
 const getConnectivityTooltip = (providerId: number): string => {
-  const result = getProviderConnectivityResult(providerId)
-  if (!result) return t('components.main.connectivity.noData')
+  const result = getProviderAvailabilityResult(providerId)
+  if (!result || !result.latest) return t('components.main.connectivity.noData')
 
-  const statusText = result.status === StatusAvailable
-    ? t('components.main.connectivity.available')
-    : result.status === StatusDegraded
-    ? t('components.main.connectivity.degraded')
-    : result.status === StatusUnavailable
-    ? t('components.main.connectivity.unavailable')
-    : t('components.main.connectivity.noData')
+  let statusText = ''
+  switch (result.latest.status) {
+    case HealthStatus.OPERATIONAL:
+      statusText = t('components.main.connectivity.available')
+      break
+    case HealthStatus.DEGRADED:
+      statusText = t('components.main.connectivity.degraded')
+      break
+    case HealthStatus.FAILED:
+    case HealthStatus.VALIDATION_ERROR:
+      statusText = t('components.main.connectivity.unavailable')
+      break
+    default:
+      statusText = t('components.main.connectivity.noData')
+  }
 
-  const latencyText = result.latencyMs > 0 ? ` (${result.latencyMs}ms)` : ''
-  return statusText + latencyText
+  const latencyText = result.latest.latencyMs > 0 ? ` (${result.latest.latencyMs}ms)` : ''
+  const uptimeText = result.uptime > 0 ? ` - ${result.uptime.toFixed(1)}%` : ''
+  return statusText + latencyText + uptimeText
 }
 
 // 刷新所有数据
@@ -1463,9 +2024,10 @@ const refreshAllData = async () => {
       loadUsageHeatmap(),
       loadProvidersFromDisk(),
       ...providerTabIds.map(refreshProxyState),
+      ...providerTabIds.map((tab) => refreshDirectAppliedStatus(tab)),
       ...providerTabIds.map((tab) => loadProviderStats(tab)),
       ...providerTabIds.map((tab) => loadBlacklistStatus(tab)), // 同步刷新黑名单状态
-      ...providerTabIds.map((tab) => loadConnectivityResults(tab)), // 同步刷新连通性状态
+      loadAvailabilityResults(), // 同步刷新可用性监控状态（改用新服务）
       refreshImportStatus(),
       pollUpdateState()
     ])
@@ -1565,8 +2127,8 @@ const startProviderStatsTimer = () => {
   providerStatsTimer = window.setInterval(() => {
     providerTabIds.forEach((tab) => {
       void loadProviderStats(tab)
-      void loadConnectivityResults(tab) // 同步刷新连通性状态
     })
+    void loadAvailabilityResults() // 同步刷新可用性监控状态（改用新服务）
   }, 60_000)
 }
 
@@ -1666,6 +2228,7 @@ onMounted(async () => {
   void loadUsageHeatmap()
   await loadProvidersFromDisk()
   await Promise.all(providerTabIds.map(refreshProxyState))
+  await Promise.all(providerTabIds.map((tab) => refreshDirectAppliedStatus(tab)))
   await Promise.all(providerTabIds.map((tab) => loadProviderStats(tab)))
   await loadAppSettings()
   await checkForUpdates()
@@ -1678,8 +2241,8 @@ onMounted(async () => {
   // 加载初始黑名单状态
   await Promise.all(providerTabIds.map((tab) => loadBlacklistStatus(tab)))
 
-  // 加载初始连通性测试结果
-  await Promise.all(providerTabIds.map((tab) => loadConnectivityResults(tab)))
+  // 加载初始可用性监控结果（改用新服务）
+  await loadAvailabilityResults()
 
   // 每秒更新黑名单倒计时
   blacklistTimer = window.setInterval(() => {
@@ -1712,6 +2275,13 @@ onMounted(async () => {
 
   window.addEventListener('app-settings-updated', handleAppSettingsUpdated)
 
+  // 监听可用性页面的 Provider 更新事件
+  const handleProvidersUpdated = () => {
+    void loadProvidersFromDisk()
+  }
+  window.addEventListener('providers-updated', handleProvidersUpdated)
+  ;(window as any).__handleProvidersUpdated = handleProvidersUpdated
+
   // 加载最后使用的供应商
   await loadLastUsedProviders()
 
@@ -1734,6 +2304,9 @@ onUnmounted(() => {
   }
   if ((window as any).__handleWindowFocus) {
     window.removeEventListener('focus', (window as any).__handleWindowFocus)
+  }
+  if ((window as any).__handleProvidersUpdated) {
+    window.removeEventListener('providers-updated', (window as any).__handleProvidersUpdated)
   }
 
   // 清理高亮计时器
@@ -1784,14 +2357,8 @@ const getDefaultEndpoint = (platform: string) => {
   return defaults[platform] || '/v1/chat/completions'
 }
 
-// 获取平台默认认证方式
-const getDefaultAuthType = (platform: string) => {
-  const defaults: Record<string, string> = {
-    claude: 'x-api-key',
-    codex: 'bearer',
-  }
-  return defaults[platform] || 'bearer'
-}
+// 获取平台默认认证方式（默认 Bearer，与 v2.2.x 保持一致）
+const getDefaultAuthType = (_platform: string) => 'bearer'
 
 // 手动测试连通性
 const handleTestConnectivity = async () => {
@@ -1807,7 +2374,7 @@ const handleTestConnectivity = async () => {
       modalState.form.apiKey,
       modalState.form.connectivityTestModel || '',
       modalState.form.connectivityTestEndpoint || getDefaultEndpoint(platform),
-      modalState.form.connectivityAuthType || getDefaultAuthType(platform)
+      resolveEffectiveAuthType()
     )
 
     connectivityTestResult.value = {
@@ -1819,23 +2386,33 @@ const handleTestConnectivity = async () => {
   } catch (error) {
     connectivityTestResult.value = {
       success: false,
-      message: t('components.main.form.connectivity.error', { error: String(error) })
+      message: t('components.main.form.connectivity.error', { error: extractErrorMessage(error) })
     }
   } finally {
     testingConnectivity.value = false
   }
 }
 
-// 监听 tab 切换，立即刷新黑名单和连通性状态
+// 监听 tab 切换，立即刷新黑名单和可用性状态
 watch(activeTab, (newTab) => {
   void loadBlacklistStatus(newTab)
-  void loadConnectivityResults(newTab)
+  // 可用性结果是全局的，不需要按 tab 刷新
 })
-const currentProxyLabel = computed(() =>
-  activeTab.value === 'claude'
-    ? t('components.main.relayToggle.hostClaude')
-    : t('components.main.relayToggle.hostCodex')
-)
+const currentProxyLabel = computed(() => {
+  const tab = activeTab.value
+  if (tab === 'claude') {
+    return t('components.main.relayToggle.hostClaude')
+  } else if (tab === 'codex') {
+    return t('components.main.relayToggle.hostCodex')
+  } else if (tab === 'gemini') {
+    return t('components.main.relayToggle.hostGemini')
+  } else if (tab === 'others') {
+    // 显示选中的工具名称
+    const tool = customCliTools.value.find(t => t.id === selectedToolId.value)
+    return tool?.name || t('components.main.relayToggle.hostOthers')
+  }
+  return t('components.main.relayToggle.hostCodex')
+})
 const activeProxyState = computed(() => proxyStates[activeTab.value])
 const activeProxyBusy = computed(() => proxyBusy[activeTab.value])
 
@@ -1902,10 +2479,24 @@ type VendorForm = {
   supportedModels?: Record<string, boolean>
   modelMapping?: Record<string, string>
   level?: number
+  apiEndpoint?: string
   cliConfig?: Record<string, any>
+  // === 可用性监控配置（新） ===
+  availabilityMonitorEnabled?: boolean
+  connectivityAutoBlacklist?: boolean
+  availabilityConfig?: {
+    testModel?: string
+    testEndpoint?: string
+    timeout?: number
+  }
+  // === 旧连通性字段（已废弃） ===
+  /** @deprecated */
   connectivityCheck?: boolean
+  /** @deprecated */
   connectivityTestModel?: string
+  /** @deprecated */
   connectivityTestEndpoint?: string
+  /** @deprecated */
   connectivityAuthType?: string
 }
 
@@ -1923,10 +2514,20 @@ const defaultFormValues = (platform?: string): VendorForm => ({
   supportedModels: {},
   modelMapping: {},
   cliConfig: {},
+  apiEndpoint: '', // API 端点（可选）
+  // 可用性监控配置（新）
+  availabilityMonitorEnabled: false,
+  connectivityAutoBlacklist: false,
+  availabilityConfig: {
+    testModel: '',
+    testEndpoint: getDefaultEndpoint(platform || 'claude'),
+    timeout: 15000,
+  },
+  // 旧连通性字段（已废弃，置空）
   connectivityCheck: false,
   connectivityTestModel: '',
-  connectivityTestEndpoint: getDefaultEndpoint(platform || 'claude'),
-  connectivityAuthType: getDefaultAuthType(platform || 'claude'),
+  connectivityTestEndpoint: '',
+  connectivityAuthType: '',
 })
 
 // Level 描述文本映射（1-10）
@@ -1977,6 +2578,16 @@ const modalState = reactive({
   },
 })
 
+// 认证方式相关状态
+const selectedAuthType = ref<string>('bearer')
+const customAuthHeader = ref<string>('')
+const authTypeOptions = computed(() => [
+  { value: 'bearer', label: 'Bearer' },
+  { value: 'x-api-key', label: 'X-API-Key' },
+])
+const resolveEffectiveAuthType = () =>
+  customAuthHeader.value.trim() || selectedAuthType.value || getDefaultAuthType(modalState.tabId)
+
 const editingCard = ref<AutomationCard | null>(null)
 const confirmState = reactive({ open: false, card: null as AutomationCard | null, tabId: tabs[0].id as ProviderTab })
 
@@ -1985,6 +2596,9 @@ const openCreateModal = () => {
   modalState.editingId = null
   editingCard.value = null
   Object.assign(modalState.form, defaultFormValues(activeTab.value))
+  // 初始化认证方式为平台默认
+  selectedAuthType.value = getDefaultAuthType(activeTab.value)
+  customAuthHeader.value = ''
   connectivityTestResult.value = null
   modalState.errors.apiUrl = ''
   modalState.open = true
@@ -2005,11 +2619,40 @@ const openEditModal = (card: AutomationCard) => {
     supportedModels: card.supportedModels || {},
     modelMapping: card.modelMapping || {},
     cliConfig: card.cliConfig || {},
-    connectivityCheck: card.connectivityCheck || false,
-    connectivityTestModel: card.connectivityTestModel || '',
-    connectivityTestEndpoint: card.connectivityTestEndpoint || '/v1/messages',
-    connectivityAuthType: card.connectivityAuthType || 'x-api-key',
+    apiEndpoint: card.apiEndpoint || '',
+    // 可用性监控配置（新）- 兼容从旧字段迁移
+    availabilityMonitorEnabled:
+      card.availabilityMonitorEnabled ?? card.connectivityCheck ?? false,
+    connectivityAutoBlacklist: card.connectivityAutoBlacklist ?? false,
+    availabilityConfig: {
+      testModel:
+        card.availabilityConfig?.testModel || card.connectivityTestModel || '',
+      testEndpoint:
+        card.availabilityConfig?.testEndpoint ||
+        card.connectivityTestEndpoint ||
+        getDefaultEndpoint(activeTab.value),
+      timeout: card.availabilityConfig?.timeout || 15000,
+    },
+    // 旧连通性字段不再写入表单
+    connectivityCheck: false,
+    connectivityTestModel: '',
+    connectivityTestEndpoint: '',
+    connectivityAuthType: card.connectivityAuthType || '',
   })
+  // 初始化认证方式状态
+  const storedAuth = (card.connectivityAuthType || '').trim()
+  const lower = storedAuth.toLowerCase()
+  if (!storedAuth) {
+    selectedAuthType.value = getDefaultAuthType(activeTab.value)
+    customAuthHeader.value = ''
+  } else if (lower === 'bearer' || lower === 'x-api-key') {
+    selectedAuthType.value = lower
+    customAuthHeader.value = ''
+  } else {
+    // 自定义 Header 名
+    selectedAuthType.value = getDefaultAuthType(activeTab.value)
+    customAuthHeader.value = storedAuth
+  }
   connectivityTestResult.value = null
   modalState.errors.apiUrl = ''
   modalState.open = true
@@ -2055,10 +2698,22 @@ const submitModal = async () => {
       supportedModels: modalState.form.supportedModels || {},
       modelMapping: modalState.form.modelMapping || {},
       cliConfig: modalState.form.cliConfig || {},
-      connectivityCheck: modalState.form.connectivityCheck || false,
-      connectivityTestModel: modalState.form.connectivityTestModel || '',
-      connectivityTestEndpoint: modalState.form.connectivityTestEndpoint || '/v1/messages',
-      connectivityAuthType: modalState.form.connectivityAuthType || 'x-api-key',
+      apiEndpoint: modalState.form.apiEndpoint || '',
+      // 可用性监控配置（新）
+      availabilityMonitorEnabled: !!modalState.form.availabilityMonitorEnabled,
+      connectivityAutoBlacklist: !!modalState.form.connectivityAutoBlacklist,
+      availabilityConfig: {
+        testModel: modalState.form.availabilityConfig?.testModel || '',
+        testEndpoint:
+          modalState.form.availabilityConfig?.testEndpoint ||
+          getDefaultEndpoint(modalState.tabId),
+        timeout: modalState.form.availabilityConfig?.timeout || 15000,
+      },
+      // 旧连通性字段清空（避免再次写入）
+      connectivityCheck: false,
+      connectivityTestModel: '',
+      connectivityTestEndpoint: '',
+      connectivityAuthType: resolveEffectiveAuthType(),
     })
     if (prevLevel !== nextLevel) {
       sortProvidersByLevel(list)
@@ -2079,10 +2734,22 @@ const submitModal = async () => {
       supportedModels: modalState.form.supportedModels || {},
       modelMapping: modalState.form.modelMapping || {},
       cliConfig: modalState.form.cliConfig || {},
-      connectivityCheck: modalState.form.connectivityCheck || false,
-      connectivityTestModel: modalState.form.connectivityTestModel || '',
-      connectivityTestEndpoint: modalState.form.connectivityTestEndpoint || '/v1/messages',
-      connectivityAuthType: modalState.form.connectivityAuthType || 'x-api-key',
+      apiEndpoint: modalState.form.apiEndpoint || '',
+      // 可用性监控配置（新）
+      availabilityMonitorEnabled: !!modalState.form.availabilityMonitorEnabled,
+      connectivityAutoBlacklist: !!modalState.form.connectivityAutoBlacklist,
+      availabilityConfig: {
+        testModel: modalState.form.availabilityConfig?.testModel || '',
+        testEndpoint:
+          modalState.form.availabilityConfig?.testEndpoint ||
+          getDefaultEndpoint(modalState.tabId),
+        timeout: modalState.form.availabilityConfig?.timeout || 15000,
+      },
+      // 旧连通性字段清空
+      connectivityCheck: false,
+      connectivityTestModel: '',
+      connectivityTestEndpoint: '',
+      connectivityAuthType: resolveEffectiveAuthType(),
     }
     list.push(newCard)
     sortProvidersByLevel(list)
@@ -2100,6 +2767,9 @@ const submitModal = async () => {
   }
 
   closeModal()
+
+  // 通知可用性页面刷新
+  window.dispatchEvent(new CustomEvent('providers-updated'))
 }
 
 const configure = (card: AutomationCard) => {
@@ -2215,6 +2885,7 @@ const onTabChange = (idx: number) => {
   const nextTab = tabs[idx]?.id
   if (nextTab) {
     void refreshProxyState(nextTab as ProviderTab)
+    void refreshDirectAppliedStatus(nextTab as ProviderTab)
     void loadProviderStats(nextTab as ProviderTab)
   }
 }
@@ -2245,6 +2916,243 @@ const handleImportClick = async () => {
     showToast(t('components.main.importConfig.error'), 'error')
   } finally {
     importBusy.value = false
+  }
+}
+
+// ========== 自定义 CLI 工具管理 ==========
+
+// CLI 工具模态框状态
+const cliToolModalState = reactive({
+  open: false,
+  editingId: null as string | null,
+  form: {
+    name: '',
+    configFiles: [] as Array<{
+      id: string
+      label: string
+      path: string
+      format: 'json' | 'toml' | 'env'
+      isPrimary: boolean
+    }>,
+    proxyInjection: [] as Array<{
+      targetFileId: string
+      baseUrlField: string
+      authTokenField: string
+    }>,
+  },
+})
+
+// CLI 工具删除确认状态
+const cliToolConfirmState = reactive({
+  open: false,
+  tool: null as CustomCliTool | null,
+})
+
+// 切换选中的 CLI 工具
+const onToolSelect = async () => {
+  if (selectedToolId.value) {
+    // 更新当前 tab 的代理状态
+    proxyStates.others = customCliProxyStates[selectedToolId.value] ?? false
+    // 加载该工具的 providers 列表
+    await loadCustomCliProviders(selectedToolId.value)
+  } else {
+    // 未选中任何工具，清空 providers 列表
+    cards.others.splice(0, cards.others.length)
+  }
+}
+
+// 打开新建 CLI 工具模态框
+const openCliToolModal = () => {
+  cliToolModalState.editingId = null
+  cliToolModalState.form.name = ''
+  cliToolModalState.form.configFiles = [{
+    id: `cfg-${Date.now()}`,
+    label: t('components.main.customCli.primaryConfig'),
+    path: '',
+    format: 'json',
+    isPrimary: true,
+  }]
+  cliToolModalState.form.proxyInjection = [{
+    targetFileId: '',
+    baseUrlField: '',
+    authTokenField: '',
+  }]
+  cliToolModalState.open = true
+}
+
+// 编辑当前选中的 CLI 工具
+const editCurrentCliTool = async () => {
+  if (!selectedToolId.value) return
+  const tool = customCliTools.value.find(t => t.id === selectedToolId.value)
+  if (!tool) return
+
+  cliToolModalState.editingId = tool.id
+  cliToolModalState.form.name = tool.name
+  cliToolModalState.form.configFiles = tool.configFiles.length > 0
+    ? tool.configFiles.map(cf => ({
+        id: cf.id,
+        label: cf.label,
+        path: cf.path,
+        format: cf.format,
+        isPrimary: cf.isPrimary ?? false,
+      }))
+    : [{
+        id: `cfg-${Date.now()}`,
+        label: t('components.main.customCli.primaryConfig'),
+        path: '',
+        format: 'json' as const,
+        isPrimary: true,
+      }]
+  cliToolModalState.form.proxyInjection = tool.proxyInjection && tool.proxyInjection.length > 0
+    ? tool.proxyInjection.map(pi => ({
+        targetFileId: pi.targetFileId,
+        baseUrlField: pi.baseUrlField,
+        authTokenField: pi.authTokenField ?? '',
+      }))
+    : [{
+        targetFileId: '',
+        baseUrlField: '',
+        authTokenField: '',
+      }]
+  cliToolModalState.open = true
+}
+
+// 请求删除当前选中的 CLI 工具
+const deleteCurrentCliTool = () => {
+  if (!selectedToolId.value) return
+  const tool = customCliTools.value.find(t => t.id === selectedToolId.value)
+  if (!tool) return
+  cliToolConfirmState.tool = tool
+  cliToolConfirmState.open = true
+}
+
+// 关闭 CLI 工具模态框
+const closeCliToolModal = () => {
+  cliToolModalState.open = false
+}
+
+// 关闭 CLI 工具删除确认框
+const closeCliToolConfirm = () => {
+  cliToolConfirmState.open = false
+  cliToolConfirmState.tool = null
+}
+
+// 添加配置文件
+const addConfigFile = () => {
+  cliToolModalState.form.configFiles.push({
+    id: `cfg-${Date.now()}`,
+    label: '',
+    path: '',
+    format: 'json',
+    isPrimary: false,
+  })
+}
+
+// 删除配置文件
+const removeConfigFile = (index: number) => {
+  if (cliToolModalState.form.configFiles.length <= 1) return
+  cliToolModalState.form.configFiles.splice(index, 1)
+}
+
+// 添加代理注入配置
+const addProxyInjection = () => {
+  cliToolModalState.form.proxyInjection.push({
+    targetFileId: '',
+    baseUrlField: '',
+    authTokenField: '',
+  })
+}
+
+// 删除代理注入配置
+const removeProxyInjection = (index: number) => {
+  if (cliToolModalState.form.proxyInjection.length <= 1) return
+  cliToolModalState.form.proxyInjection.splice(index, 1)
+}
+
+// 提交 CLI 工具模态框
+const submitCliToolModal = async () => {
+  const name = cliToolModalState.form.name.trim()
+  if (!name) {
+    showToast(t('components.main.customCli.nameRequired'), 'error')
+    return
+  }
+
+  // 过滤掉空的配置文件
+  const validConfigFiles = cliToolModalState.form.configFiles.filter(cf => cf.path.trim())
+  if (validConfigFiles.length === 0) {
+    showToast(t('components.main.customCli.configRequired'), 'error')
+    return
+  }
+
+  // 验证至少有一个主配置文件
+  const hasPrimary = validConfigFiles.some(cf => cf.isPrimary)
+  if (!hasPrimary) {
+    // 如果没有选中主配置文件，自动将第一个设为主配置
+    validConfigFiles[0].isPrimary = true
+  }
+
+  // 过滤掉空的代理注入配置
+  const validProxyInjections = cliToolModalState.form.proxyInjection.filter(
+    pi => pi.targetFileId && pi.baseUrlField.trim()
+  )
+
+  // 验证代理注入目标指向有效的配置文件 ID
+  const validFileIds = new Set(validConfigFiles.map(cf => cf.id))
+  const invalidInjections = validProxyInjections.filter(pi => !validFileIds.has(pi.targetFileId))
+  if (invalidInjections.length > 0) {
+    showToast(t('components.main.customCli.invalidProxyTarget'), 'error')
+    return
+  }
+
+  try {
+    if (cliToolModalState.editingId) {
+      // 更新现有工具
+      await updateCustomCliTool(cliToolModalState.editingId, {
+        id: cliToolModalState.editingId,
+        name,
+        configFiles: validConfigFiles,
+        proxyInjection: validProxyInjections,
+      })
+      showToast(t('components.main.customCli.updateSuccess'), 'success')
+    } else {
+      // 创建新工具
+      const newTool = await createCustomCliTool({
+        name,
+        configFiles: validConfigFiles,
+        proxyInjection: validProxyInjections,
+      })
+      selectedToolId.value = newTool.id
+      showToast(t('components.main.customCli.createSuccess'), 'success')
+    }
+
+    // 刷新工具列表
+    await loadCustomCliTools()
+    closeCliToolModal()
+  } catch (error) {
+    console.error('Failed to save CLI tool', error)
+    showToast(t('components.main.customCli.saveFailed'), 'error')
+  }
+}
+
+// 确认删除 CLI 工具
+const confirmDeleteCliTool = async () => {
+  if (!cliToolConfirmState.tool) return
+  try {
+    await deleteCustomCliTool(cliToolConfirmState.tool.id)
+    showToast(t('components.main.customCli.deleteSuccess'), 'success')
+
+    // 如果删除的是当前选中的工具，清空选择
+    if (selectedToolId.value === cliToolConfirmState.tool.id) {
+      selectedToolId.value = null
+      proxyStates.others = false
+    }
+
+    // 刷新工具列表
+    await loadCustomCliTools()
+    closeCliToolConfirm()
+  } catch (error) {
+    console.error('Failed to delete CLI tool', error)
+    showToast(t('components.main.customCli.deleteFailed'), 'error')
   }
 }
 </script>
@@ -2323,14 +3231,14 @@ const handleImportClick = async () => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 28px;
-  height: 20px;
-  padding: 0 6px;
-  border-radius: 4px;
+  min-width: 32px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 6px;
   font-size: 11px;
   font-weight: 600;
   line-height: 1;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.03em;
   transition: all 0.2s ease;
 }
 
@@ -2718,14 +3626,18 @@ const handleImportClick = async () => {
 
 /* 黑名单等级徽章（卡片标题行） */
 .blacklist-level-badge {
-  display: inline-block;
-  padding: 2px 6px;
-  font-size: 10px;
-  font-weight: 700;
-  border-radius: 3px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.03em;
+  transition: all 0.2s ease;
   margin-left: 4px;
 }
 
@@ -2983,5 +3895,322 @@ const handleImportClick = async () => {
 :global(.dark) .test-result.error {
   background: rgba(239, 68, 68, 0.15);
   color: #f87171;
+}
+
+/* ========== CLI 工具选择器样式 ========== */
+.cli-tool-selector {
+  padding: 12px 16px;
+  background: var(--mac-surface);
+  border-radius: 8px;
+  margin-bottom: 16px;
+  border: 1px solid var(--mac-border);
+}
+
+.tool-selector-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tool-select {
+  flex: 1;
+  padding: 8px 12px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-size: 14px;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tool-select:hover {
+  border-color: var(--color-border-hover);
+}
+
+.tool-select:focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.add-tool-btn {
+  flex-shrink: 0;
+}
+
+.no-tools-hint {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--mac-text-secondary);
+  text-align: center;
+}
+
+/* ========== CLI 工具表单样式 ========== */
+.cli-tool-form .field-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.cli-tool-form .field-header span {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--mac-text);
+}
+
+.cli-tool-form .add-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: var(--mac-accent);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.cli-tool-form .add-btn:hover {
+  filter: brightness(1.1);
+}
+
+.cli-tool-form .add-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.cli-tool-form .remove-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  color: var(--mac-text-secondary);
+  border: 1px solid var(--mac-border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.cli-tool-form .remove-btn:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: #ef4444;
+  color: #ef4444;
+}
+
+.cli-tool-form .remove-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.cli-tool-form .remove-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* ========== 配置文件列表样式 ========== */
+.config-files-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.config-file-item {
+  padding: 12px;
+  background: var(--mac-surface-strong);
+  border: 1px solid var(--mac-border);
+  border-radius: 8px;
+}
+
+.config-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.config-label-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.config-format-select {
+  width: 80px;
+  padding: 6px 8px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+
+.config-format-select:focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.primary-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--mac-text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.primary-checkbox input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--mac-accent);
+  cursor: pointer;
+}
+
+.config-path-input {
+  width: 100%;
+}
+
+/* ========== 代理注入配置样式 ========== */
+.proxy-injection-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.proxy-injection-item {
+  padding: 12px;
+  background: var(--mac-surface-strong);
+  border: 1px solid var(--mac-border);
+  border-radius: 8px;
+}
+
+.proxy-injection-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.target-file-select {
+  flex: 1;
+  padding: 8px 12px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+
+.target-file-select:focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.proxy-fields-row {
+  display: flex;
+  gap: 8px;
+}
+
+.proxy-field-input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 暗色模式适配 */
+:global(.dark) .cli-tool-selector {
+  background: var(--mac-surface);
+  border-color: var(--mac-border);
+}
+
+:global(.dark) .config-file-item,
+:global(.dark) .proxy-injection-item {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+:global(.dark) .tool-select,
+:global(.dark) .config-format-select,
+:global(.dark) .target-file-select {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: var(--mac-text);
+}
+
+:global(.dark) .tool-select:hover,
+:global(.dark) .config-format-select:hover,
+:global(.dark) .target-file-select:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+/* 直连应用按钮 */
+.direct-apply-btn {
+  position: relative;
+  transition: all 0.2s ease;
+  color: var(--mac-text-secondary);
+  min-width: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.direct-apply-btn .lightning-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.direct-apply-btn:not(:disabled):not(.is-active):hover {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.direct-apply-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  filter: grayscale(100%);
+}
+
+.direct-apply-btn.is-active {
+  border: 1px solid #10b981;
+  background: rgba(16, 185, 129, 0.1);
+  color: #10b981;
+  width: auto;
+  padding: 0 8px;
+  border-radius: 6px;
+  gap: 4px;
+}
+
+.direct-apply-btn .apply-text {
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+:global(.dark) .direct-apply-btn.is-active {
+  border-color: #34d399;
+  background: rgba(52, 211, 153, 0.15);
+  color: #34d399;
+}
+
+/* 当前使用徽章 */
+.current-use-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  margin-left: 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: white;
+  box-shadow: 0 2px 4px rgba(16, 185, 129, 0.2);
+}
+
+:global(.dark) .current-use-badge {
+  background: linear-gradient(135deg, #059669 0%, #047857 100%);
 }
 </style>

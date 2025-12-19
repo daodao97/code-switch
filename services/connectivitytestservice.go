@@ -134,11 +134,20 @@ func (cts *ConnectivityTestService) TestProvider(ctx context.Context, provider P
 	req.Header.Set("Content-Type", "application/json")
 	if provider.APIKey != "" {
 		// authType 已在上方获取
-		if authType == "x-api-key" {
+		authTypeLower := strings.ToLower(authType)
+		switch authTypeLower {
+		case "x-api-key":
 			req.Header.Set("x-api-key", provider.APIKey)
 			req.Header.Set("anthropic-version", "2023-06-01")
-		} else {
+		case "bearer":
 			req.Header.Set("Authorization", "Bearer "+provider.APIKey)
+		default:
+			// 自定义 Header 名
+			headerName := strings.TrimSpace(authType)
+			if headerName == "" || strings.EqualFold(headerName, "custom") {
+				headerName = "Authorization"
+			}
+			req.Header.Set(headerName, provider.APIKey)
 		}
 	}
 
@@ -207,20 +216,17 @@ func (cts *ConnectivityTestService) getEffectiveEndpoint(provider *Provider, pla
 }
 
 // getEffectiveAuthType 获取有效认证方式（含平台默认值）
+// 返回值保留原始大小写，用于自定义 Header 名
 func (cts *ConnectivityTestService) getEffectiveAuthType(provider *Provider, platform string) string {
-	authType := strings.ToLower(strings.TrimSpace(provider.ConnectivityAuthType))
+	authType := strings.TrimSpace(provider.ConnectivityAuthType)
 	if authType != "" {
 		return authType
 	}
 	// 平台默认认证方式
-	switch strings.ToLower(platform) {
-	case "claude":
+	if strings.ToLower(platform) == "claude" {
 		return "x-api-key"
-	case "codex":
-		return "bearer"
-	default:
-		return "bearer"
 	}
+	return "bearer"
 }
 
 // buildTestRequest 根据端点构建测试请求体

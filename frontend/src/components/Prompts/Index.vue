@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import MarkdownEditor from '../common/MarkdownEditor.vue'
 import {
@@ -28,6 +28,7 @@ const loading = ref(false)
 const showModal = ref(false)
 const editingPrompt = ref<Prompt | null>(null)
 const currentFileContent = ref<string | null>(null)
+const nameInputRef = ref<HTMLInputElement | null>(null)
 
 // 表单
 const formData = ref({
@@ -71,13 +72,17 @@ async function handleToggleEnabled(prompt: Prompt) {
 function openCreateModal() {
   editingPrompt.value = null
   formData.value = {
-    id: crypto.randomUUID(),
+    id: crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     name: '',
     content: '',
     description: '',
     enabled: false
   }
   showModal.value = true
+  // 等待 DOM 更新后聚焦输入框（修复 macOS WebView 键盘输入问题）
+  nextTick(() => {
+    nameInputRef.value?.focus()
+  })
 }
 
 function openEditModal(prompt: Prompt) {
@@ -90,6 +95,10 @@ function openEditModal(prompt: Prompt) {
     enabled: prompt.enabled
   }
   showModal.value = true
+  // 等待 DOM 更新后聚焦输入框（修复 macOS WebView 键盘输入问题）
+  nextTick(() => {
+    nameInputRef.value?.focus()
+  })
 }
 
 async function savePrompt() {
@@ -239,50 +248,49 @@ onMounted(() => {
       </button>
     </div>
 
-    <!-- Edit Modal -->
-    <Teleport to="body">
-      <div v-if="showModal" class="modal-overlay" @click.self="showModal = false">
-        <div class="modal-content">
-          <h2 class="modal-title">
-            {{ editingPrompt ? t('prompts.form.editTitle') : t('prompts.form.createTitle') }}
-          </h2>
+    <!-- Edit Modal (不使用 Teleport 以修复 macOS WebView 键盘输入问题) -->
+    <div v-if="showModal" class="modal-overlay" @click.self="showModal = false">
+      <div class="modal-content" tabindex="-1">
+        <h2 class="modal-title">
+          {{ editingPrompt ? t('prompts.form.editTitle') : t('prompts.form.createTitle') }}
+        </h2>
 
-          <div class="form-group">
-            <label>{{ t('prompts.form.name') }}</label>
-            <input
-              v-model="formData.name"
-              type="text"
-              class="form-input"
-              :placeholder="t('prompts.form.namePlaceholder')"
-            />
-          </div>
+        <div class="form-group">
+          <label>{{ t('prompts.form.name') }}</label>
+          <input
+            ref="nameInputRef"
+            v-model="formData.name"
+            type="text"
+            class="form-input"
+            :placeholder="t('prompts.form.namePlaceholder')"
+          />
+        </div>
 
-          <div class="form-group">
-            <label>{{ t('prompts.form.description') }}</label>
-            <input
-              v-model="formData.description"
-              type="text"
-              class="form-input"
-              :placeholder="t('prompts.form.descriptionPlaceholder')"
-            />
-          </div>
+        <div class="form-group">
+          <label>{{ t('prompts.form.description') }}</label>
+          <input
+            v-model="formData.description"
+            type="text"
+            class="form-input"
+            :placeholder="t('prompts.form.descriptionPlaceholder')"
+          />
+        </div>
 
-          <div class="form-group">
-            <label>{{ t('prompts.form.content') }}</label>
-            <MarkdownEditor v-model="formData.content" />
-          </div>
+        <div class="form-group">
+          <label>{{ t('prompts.form.content') }}</label>
+          <MarkdownEditor v-model="formData.content" />
+        </div>
 
-          <div class="modal-actions">
-            <button class="secondary-btn" @click="showModal = false">
-              {{ t('prompts.form.cancel') }}
-            </button>
-            <button class="primary-btn" @click="savePrompt" :disabled="!formData.name">
-              {{ t('prompts.form.save') }}
-            </button>
-          </div>
+        <div class="modal-actions">
+          <button class="secondary-btn" @click="showModal = false">
+            {{ t('prompts.form.cancel') }}
+          </button>
+          <button class="primary-btn" @click="savePrompt" :disabled="!formData.name">
+            {{ t('prompts.form.save') }}
+          </button>
         </div>
       </div>
-    </Teleport>
+    </div>
   </div>
 </template>
 

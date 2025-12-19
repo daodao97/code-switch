@@ -197,7 +197,7 @@
         </div>
 
         <!-- 配置预览（可折叠） -->
-        <div v-if="previewFiles.length" class="cli-preview-section">
+        <div v-if="previewFiles.length || currentFiles.length" class="cli-preview-section">
           <div class="cli-preview-header" @click="togglePreview">
             <svg
               class="expand-icon"
@@ -217,15 +217,93 @@
             <span class="preview-icon">👁️</span>
             <span>{{ t('components.cliConfig.previewTitle') }}</span>
             <span class="cli-preview-count">{{ previewFiles.length }}</span>
+            <button
+              v-if="previewExpanded && selectedPreviewTab === 0"
+              type="button"
+              class="cli-action-btn cli-preview-lock"
+              @click.stop="togglePreviewEditable"
+            >
+              <span v-if="previewEditable">🔓 {{ t('components.cliConfig.previewEditUnlocked') }}</span>
+              <span v-else>🔒 {{ t('components.cliConfig.previewEditLocked') }}</span>
+            </button>
           </div>
-          <div v-if="previewExpanded" class="cli-preview-list">
-            <div v-for="file in previewFiles" :key="file.path || file.format" class="cli-preview-card">
-              <div class="cli-preview-meta">
-                <span class="cli-preview-name">{{ file.path || t('components.cliConfig.previewUnknownPath') }}</span>
-                <span class="cli-preview-format">{{ (file.format || config?.configFormat || '').toUpperCase() }}</span>
-              </div>
-              <pre class="cli-preview-content">{{ file.content }}</pre>
-            </div>
+          <div v-if="previewExpanded" class="cli-preview-tabs-wrapper">
+            <TabGroup :selectedIndex="selectedPreviewTab" @change="selectedPreviewTab = $event">
+              <TabList class="cli-tabs-list">
+                <Tab as="template" v-slot="{ selected }">
+                  <button :class="['cli-tab-btn', { selected }]">
+                    {{ t('components.cliConfig.tabPreview') }}
+                  </button>
+                </Tab>
+                <Tab as="template" v-slot="{ selected }">
+                  <button :class="['cli-tab-btn', { selected }]">
+                    {{ t('components.cliConfig.tabCurrent') }}
+                  </button>
+                </Tab>
+              </TabList>
+              <TabPanels>
+                <!-- Preview Tab: 激活后的配置 -->
+                <TabPanel class="cli-preview-list">
+                  <div
+                    v-for="(file, index) in previewFiles"
+                    :key="getPreviewKey(file, index)"
+                    class="cli-preview-card"
+                  >
+                    <div class="cli-preview-meta">
+                      <span class="cli-preview-name">{{ file.path || t('components.cliConfig.previewUnknownPath') }}</span>
+                      <span class="cli-preview-format">{{ (file.format || config?.configFormat || '').toUpperCase() }}</span>
+                    </div>
+                    <template v-if="previewEditable">
+                      <textarea
+                        :ref="index === 0 ? (el) => firstTextareaRef = el as HTMLTextAreaElement : undefined"
+                        v-model="editingContent[getPreviewKey(file, index)]"
+                        class="cli-preview-textarea"
+                        rows="8"
+                      />
+                      <div class="cli-preview-actions">
+                        <button
+                          type="button"
+                          class="cli-action-btn cli-primary-btn"
+                          :disabled="previewSaving"
+                          @click="handleApplyPreviewEdit(file, index)"
+                        >
+                          {{ t('components.cliConfig.previewApply') }}
+                        </button>
+                        <button
+                          type="button"
+                          class="cli-action-btn"
+                          :disabled="previewSaving"
+                          @click="handleResetPreviewEdit(file, index)"
+                        >
+                          {{ t('components.cliConfig.previewReset') }}
+                        </button>
+                      </div>
+                      <div
+                        v-if="previewErrors[getPreviewKey(file, index)]"
+                        class="cli-preview-error"
+                      >
+                        {{ previewErrors[getPreviewKey(file, index)] }}
+                      </div>
+                    </template>
+                    <pre v-else class="cli-preview-content">{{ file.content }}</pre>
+                  </div>
+                </TabPanel>
+                <!-- Current Tab: 当前磁盘配置（只读） -->
+                <TabPanel class="cli-preview-list">
+                  <div
+                    v-for="(file, index) in currentFiles"
+                    :key="'current-' + getPreviewKey(file, index)"
+                    class="cli-preview-card"
+                  >
+                    <div class="cli-preview-meta">
+                      <span class="cli-preview-name">{{ file.path || t('components.cliConfig.previewUnknownPath') }}</span>
+                      <span class="cli-preview-format">{{ (file.format || config?.configFormat || '').toUpperCase() }}</span>
+                    </div>
+                    <pre class="cli-preview-content">{{ file.content }}</pre>
+                  </div>
+                </TabPanel>
+              </TabPanels>
+            </TabGroup>
           </div>
         </div>
       </template>
@@ -238,10 +316,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { TabGroup, TabList, Tab, TabPanels, TabPanel } from '@headlessui/vue'
 import {
   fetchCLIConfig,
+  saveCLIConfigFileContent,
   fetchCLITemplate,
   setCLITemplate,
   restoreDefaultConfig,
@@ -251,10 +331,16 @@ import {
   type CLIConfigFile,
 } from '../../services/cliConfig'
 import { showToast } from '../../utils/toast'
+import { extractErrorMessage } from '../../utils/error'
 
 const props = defineProps<{
   platform: CLIPlatform
   modelValue?: Record<string, any>
+  // Gemini 供应商配置（用于预览"激活后"的 .env 内容）
+  providerConfig?: {
+    apiKey?: string
+    baseUrl?: string
+  }
 }>()
 
 const emit = defineEmits<{
@@ -270,6 +356,12 @@ const editableValues = ref<Record<string, any>>({})
 const isGlobalTemplate = ref(false)
 const customFields = ref<Array<{ key: string; value: string }>>([])
 const previewExpanded = ref(false)
+const previewEditable = ref(false)
+const previewSaving = ref(false)
+const editingContent = ref<Record<string, string>>({})
+const previewErrors = ref<Record<string, string>>({})
+const firstTextareaRef = ref<HTMLTextAreaElement | null>(null)
+const selectedPreviewTab = ref(0) // 0: Preview, 1: Current
 
 // 获取所有预置字段的 key（包括锁定和可编辑）
 const presetFieldKeys = computed(() => {
@@ -293,29 +385,260 @@ const platformLabels: Record<CLIPlatform, string> = {
 
 const platformLabel = computed(() => platformLabels[props.platform] || props.platform)
 
+// 检查是否有有效的供应商输入（避免空值触发注入）
+const hasProviderInput = computed(() => {
+  return !!(props.providerConfig?.apiKey?.trim() || props.providerConfig?.baseUrl?.trim())
+})
+
 const lockedFields = computed(() => {
-  return config.value?.fields.filter(f => f.locked) || []
+  const fields = config.value?.fields.filter(f => f.locked) || []
+
+  // 仅当有有效输入时，用供应商配置值覆盖显示
+  if (hasProviderInput.value) {
+    // 提取并 trim 供应商配置值（避免 TS 窄化问题和显示不一致）
+    const apiKey = props.providerConfig?.apiKey?.trim() || ''
+    const baseUrl = props.providerConfig?.baseUrl?.trim() || ''
+
+    return fields.map(field => {
+      const newField = { ...field }
+
+      if (props.platform === 'gemini') {
+        if (field.key === 'GEMINI_API_KEY' && apiKey) {
+          newField.value = apiKey
+        }
+        if (field.key === 'GOOGLE_GEMINI_BASE_URL' && baseUrl) {
+          newField.value = baseUrl
+        }
+      }
+
+      if (props.platform === 'claude') {
+        if (field.key === 'env.ANTHROPIC_BASE_URL' && baseUrl) {
+          newField.value = baseUrl
+        }
+        if (field.key === 'env.ANTHROPIC_AUTH_TOKEN' && apiKey) {
+          newField.value = apiKey
+        }
+      }
+
+      return newField
+    })
+  }
+
+  return fields
 })
 
 const editableFields = computed(() => {
   return config.value?.fields.filter(f => !f.locked) || []
 })
 
+// 辅助函数：将 Gemini 供应商配置注入到 .env 内容中
+// 注意：这是简化的预览逻辑，仅展示 apiKey/baseUrl 的预期变化
+// 后端 SwitchProvider() 实际是整文件覆盖写，这里做局部补丁以便用户理解
+const applyGeminiProviderConfig = (
+  content: string,
+  providerConfig: { apiKey?: string; baseUrl?: string }
+): string => {
+  // 处理空内容的情况
+  const trimmedContent = (content || '').trim()
+  const lines = trimmedContent ? trimmedContent.split(/\r?\n/) : []
+  const newLines: string[] = []
+
+  // 定义要更新的键值对（只有非空值才写入，与后端行为一致）
+  // 按后端写入顺序：GOOGLE_GEMINI_BASE_URL → GEMINI_API_KEY
+  const updates = new Map<string, string>()
+  if (providerConfig.baseUrl?.trim()) updates.set('GOOGLE_GEMINI_BASE_URL', providerConfig.baseUrl.trim())
+  if (providerConfig.apiKey?.trim()) updates.set('GEMINI_API_KEY', providerConfig.apiKey.trim())
+
+  const foundKeys = new Set<string>()
+
+  // 1. 遍历现有行，替换或删除
+  for (const line of lines) {
+    const trimmed = line.trim()
+    // 跳过注释和空行
+    if (trimmed.startsWith('#') || !trimmed.includes('=')) {
+      newLines.push(line)
+      continue
+    }
+
+    const eqIndex = line.indexOf('=')
+    const key = line.substring(0, eqIndex).trim()
+
+    // 如果是我们关注的 key
+    if (key === 'GEMINI_API_KEY' || key === 'GOOGLE_GEMINI_BASE_URL') {
+      if (updates.has(key)) {
+        // 有新值：替换
+        newLines.push(`${key}=${updates.get(key)}`)
+        foundKeys.add(key)
+      }
+      // 没有新值：删除（不添加到 newLines）
+    } else {
+      // 其他 key 保持原样
+      newLines.push(line)
+    }
+  }
+
+  // 2. 追加不存在的 key（按后端顺序：GOOGLE_GEMINI_BASE_URL → GEMINI_API_KEY）
+  const keysToAdd = ['GOOGLE_GEMINI_BASE_URL', 'GEMINI_API_KEY']
+  for (const key of keysToAdd) {
+    if (updates.has(key) && !foundKeys.has(key)) {
+      // 确保追加前有换行（如果文件不为空且最后一行不是空行）
+      if (newLines.length > 0 && newLines[newLines.length - 1] !== '') {
+        newLines.push('')
+      }
+      newLines.push(`${key}=${updates.get(key)}`)
+    }
+  }
+
+  return newLines.join('\n')
+}
+
+// 辅助函数：将 Claude 供应商配置注入到 settings.json 内容中
+const applyClaudeProviderConfig = (
+  content: string,
+  providerConfig: { apiKey?: string; baseUrl?: string }
+): string => {
+  let data: Record<string, any> = {}
+  try {
+    if (content.trim()) {
+      const parsed = JSON.parse(content)
+      // 确保解析结果是普通对象（排除数组和 null）
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        data = parsed
+      }
+    }
+  } catch {
+    return content // 解析失败，返回原内容
+  }
+
+  // 确保 env 是普通对象（排除数组）
+  if (!data.env || typeof data.env !== 'object' || Array.isArray(data.env)) {
+    data.env = {}
+  }
+
+  // 注入供应商配置
+  if (providerConfig.baseUrl?.trim()) {
+    data.env.ANTHROPIC_BASE_URL = providerConfig.baseUrl.trim()
+  }
+  if (providerConfig.apiKey?.trim()) {
+    data.env.ANTHROPIC_AUTH_TOKEN = providerConfig.apiKey.trim()
+  }
+
+  return JSON.stringify(data, null, 2)
+}
+
 // 配置文件预览列表
 const previewFiles = computed((): CLIConfigFile[] => {
   if (!config.value) return []
-  if (config.value.rawFiles && config.value.rawFiles.length > 0) {
-    return config.value.rawFiles
+
+  const rawFiles = config.value.rawFiles || []
+  const primaryPath = config.value.filePath || ''
+  const primaryFormat = config.value.configFormat
+  const files: CLIConfigFile[] = []
+
+  // 始终把主配置文件放在第一个；即使文件不存在，也给出占位项，便于在预览区创建/编辑
+  if (primaryPath) {
+    const existingPrimary = rawFiles.find(f => f.path === primaryPath)
+    if (existingPrimary) {
+      files.push(existingPrimary)
+    } else {
+      files.push({
+        path: primaryPath,
+        format: primaryFormat,
+        content: config.value.rawContent || '',
+      })
+    }
   }
-  // 回退兼容：使用 rawContent
-  if (config.value.rawContent) {
-    return [{
+
+  // 追加其他文件（如 Codex 的 auth.json）
+  rawFiles.forEach(f => {
+    if (!primaryPath || f.path !== primaryPath) {
+      files.push(f)
+    }
+  })
+
+  // 回退兼容：老后端可能只有 rawContent
+  if (files.length === 0 && config.value.rawContent) {
+    files.push({
       path: config.value.filePath || '',
       format: config.value.configFormat,
       content: config.value.rawContent,
-    }]
+    })
   }
-  return []
+
+  // 根据平台注入供应商配置，展示"激活后"的配置预览
+  // 仅当有有效输入时才注入（避免空值也触发重写）
+  if (hasProviderInput.value) {
+    if (props.platform === 'gemini') {
+      return files.map(file => {
+        const isEnvFile = file.path?.endsWith('.env') ||
+                          file.format === 'env' ||
+                          (!file.format && primaryFormat === 'env')
+        if (isEnvFile) {
+          return {
+            ...file,
+            content: applyGeminiProviderConfig(file.content, props.providerConfig!)
+          }
+        }
+        return file
+      })
+    }
+
+    if (props.platform === 'claude') {
+      return files.map(file => {
+        const isJsonFile = file.path?.endsWith('.json') ||
+                           file.format === 'json' ||
+                           (!file.format && primaryFormat === 'json')
+        if (isJsonFile) {
+          return {
+            ...file,
+            content: applyClaudeProviderConfig(file.content, props.providerConfig!)
+          }
+        }
+        return file
+      })
+    }
+  }
+
+  return files
+})
+
+// 当前磁盘状态（不注入供应商配置，展示真实磁盘内容）
+const currentFiles = computed((): CLIConfigFile[] => {
+  if (!config.value) return []
+
+  const rawFiles = config.value.rawFiles || []
+  const primaryPath = config.value.filePath || ''
+  const primaryFormat = config.value.configFormat
+  const files: CLIConfigFile[] = []
+
+  if (primaryPath) {
+    const existingPrimary = rawFiles.find(f => f.path === primaryPath)
+    if (existingPrimary) {
+      files.push(existingPrimary)
+    } else {
+      files.push({
+        path: primaryPath,
+        format: primaryFormat,
+        content: config.value.rawContent || '',
+      })
+    }
+  }
+
+  rawFiles.forEach(f => {
+    if (!primaryPath || f.path !== primaryPath) {
+      files.push(f)
+    }
+  })
+
+  if (files.length === 0 && config.value.rawContent) {
+    files.push({
+      path: config.value.filePath || '',
+      format: config.value.configFormat,
+      content: config.value.rawContent,
+    })
+  }
+
+  return files
 })
 
 // 获取字段值，支持嵌套的 env.* 字段
@@ -361,6 +684,8 @@ const loadConfig = async () => {
 
     // 提取自定义字段（在预置字段列表加载后）
     extractCustomFields()
+    // 初始化预览可编辑内容
+    initPreviewEditing()
   } catch (error) {
     console.error('Failed to load CLI config:', error)
     config.value = null
@@ -702,6 +1027,85 @@ const applyParsedConfig = (data: Record<string, any>) => {
 // 切换预览区展开状态
 const togglePreview = () => {
   previewExpanded.value = !previewExpanded.value
+}
+
+// 切换预览区编辑模式
+const togglePreviewEditable = () => {
+  previewEditable.value = !previewEditable.value
+  if (!previewEditable.value) {
+    // 关闭编辑模式时清理错误
+    previewErrors.value = {}
+  } else {
+    // 解锁编辑模式时
+    if (Object.keys(editingContent.value).length === 0) {
+      // 首次解锁时，如果还没初始化，补一次
+      initPreviewEditing()
+    }
+    // 等待 DOM 更新后聚焦第一个 textarea（修复 macOS WebView 键盘输入问题）
+    nextTick(() => {
+      firstTextareaRef.value?.focus()
+    })
+  }
+}
+
+// 生成预览文件的唯一 key
+const getPreviewKey = (file: CLIConfigFile, index: number): string => {
+  // 优先使用 path，否则使用 format-index 组合确保唯一性
+  return file.path || `${file.format || 'file'}-${index}`
+}
+
+// 初始化预览编辑内容
+const initPreviewEditing = () => {
+  const nextContent: Record<string, string> = {}
+  previewFiles.value.forEach((file, index) => {
+    const key = getPreviewKey(file, index)
+    nextContent[key] = file.content || ''
+  })
+  editingContent.value = nextContent
+  previewErrors.value = {}
+}
+
+// 应用预览编辑
+const handleApplyPreviewEdit = async (file: CLIConfigFile, index: number) => {
+  const key = getPreviewKey(file, index)
+  const text = editingContent.value[key] ?? file.content ?? ''
+
+  if (!file.path) {
+    previewErrors.value[key] = t('components.cliConfig.previewUnknownPath')
+    showToast(t('components.cliConfig.previewUnknownPath'), 'error')
+    return
+  }
+
+  previewSaving.value = true
+  try {
+    await saveCLIConfigFileContent(props.platform, file.path, text)
+    // 重新拉取，让预览展示真实落盘内容（含后端强制写入的锁定字段）
+    config.value = await fetchCLIConfig(props.platform)
+    // 同步 editableValues 到新配置，避免表单状态不一致
+    editableValues.value = { ...(config.value?.editable || {}) }
+    // 提取自定义字段（防止预览保存覆盖了自定义字段后表单丢失）
+    extractCustomFields()
+    // 通知父组件（避免后续表单提交覆盖预览保存的内容）
+    emitChanges()
+    // 仅重置当前文件的预览内容，保留其他文件的未保存编辑
+    editingContent.value[key] = previewFiles.value.find((f, i) => getPreviewKey(f, i) === key)?.content || ''
+    delete previewErrors.value[key]
+    showToast(t('components.cliConfig.previewApplySuccess'), 'success')
+  } catch (error) {
+    console.error('Failed to save preview content:', error)
+    const errorMsg = extractErrorMessage(error, t('components.cliConfig.loadError'))
+    previewErrors.value[key] = errorMsg
+    showToast(errorMsg, 'error')
+  } finally {
+    previewSaving.value = false
+  }
+}
+
+// 还原预览编辑
+const handleResetPreviewEdit = (file: CLIConfigFile, index: number) => {
+  const key = getPreviewKey(file, index)
+  editingContent.value[key] = file.content || ''
+  delete previewErrors.value[key]
 }
 
 // 监听 modelValue 变化
@@ -1090,6 +1494,48 @@ onMounted(() => {
   font-size: 14px;
 }
 
+/* Tabs 样式 */
+.cli-preview-tabs-wrapper {
+  margin-top: 12px;
+}
+
+.cli-tabs-list {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--mac-surface-strong);
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+
+.cli-tab-btn {
+  flex: 1;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--mac-text-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.cli-tab-btn:hover:not(.selected) {
+  background: var(--mac-surface);
+  color: var(--mac-text);
+}
+
+.cli-tab-btn.selected {
+  background: var(--mac-accent);
+  color: white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+:global(.dark) .cli-tab-btn.selected {
+  background: var(--mac-accent);
+}
+
 .cli-preview-count {
   margin-left: auto;
   font-size: 11px;
@@ -1156,6 +1602,65 @@ onMounted(() => {
   background: var(--mac-bg);
 }
 
+/* 预览区解锁编辑样式 */
+.cli-preview-lock {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--mac-text-secondary);
+  padding: 4px 8px;
+}
+
+.cli-preview-lock:hover {
+  color: var(--mac-text);
+}
+
+.cli-preview-textarea {
+  width: 100%;
+  min-height: 160px;
+  padding: 12px;
+  border: 1px solid var(--mac-border);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  font-family: monospace;
+  background: var(--mac-bg);
+  color: var(--mac-text);
+  resize: vertical;
+}
+
+.cli-preview-textarea:focus {
+  outline: none;
+  border-color: var(--mac-accent);
+}
+
+.cli-preview-actions {
+  display: flex;
+  gap: 8px;
+  margin: 8px 12px 4px;
+}
+
+.cli-primary-btn {
+  background: var(--mac-accent);
+  color: white;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.cli-primary-btn:hover {
+  opacity: 0.9;
+}
+
+.cli-preview-error {
+  font-size: 12px;
+  color: var(--mac-error, #ff3b30);
+  margin: 4px 12px 8px;
+}
+
 /* 深色模式适配 */
 :global(.dark) .cli-field-input {
   background: var(--mac-surface-strong);
@@ -1167,5 +1672,9 @@ onMounted(() => {
 
 :global(.dark) .cli-field-input.disabled {
   background: var(--mac-bg);
+}
+
+:global(.dark) .cli-preview-textarea {
+  background: var(--mac-surface-strong);
 }
 </style>

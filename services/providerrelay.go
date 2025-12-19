@@ -191,9 +191,20 @@ func (prs *ProviderRelayService) registerRoutes(router gin.IRouter) {
 	router.POST("/v1/messages", prs.proxyHandler("claude", "/v1/messages"))
 	router.POST("/responses", prs.proxyHandler("codex", "/responses"))
 
+	// /v1/models 端点（OpenAI-compatible API）
+	// 支持 Claude 和 Codex 平台
+	router.GET("/v1/models", prs.modelsHandler("claude"))
+
 	// Gemini API 端点（使用专门的路径前缀避免与 Claude 冲突）
 	router.POST("/gemini/v1beta/*any", prs.geminiProxyHandler("/v1beta"))
 	router.POST("/gemini/v1/*any", prs.geminiProxyHandler("/v1"))
+
+	// 自定义 CLI 工具端点（路由格式: /custom/:toolId/v1/messages）
+	// toolId 用于区分不同的 CLI 工具，对应 provider kind 为 "custom:{toolId}"
+	router.POST("/custom/:toolId/v1/messages", prs.customCliProxyHandler())
+	
+	// 自定义 CLI 工具的 /v1/models 端点
+	router.GET("/custom/:toolId/v1/models", prs.customModelsHandler())
 }
 
 func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.HandlerFunc {
@@ -295,7 +306,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 		clientHeaders := cloneHeaders(c.Request.Header)
 
 		// 获取拉黑功能开关状态
-		blacklistEnabled := prs.blacklistService.IsLevelBlacklistEnabled()
+		blacklistEnabled := prs.blacklistService.ShouldUseFixedMode()
 
 		// 【拉黑模式】：只尝试第一个 provider，失败直接返回错误（不自动降级）
 		// 只有当 provider 被拉黑后，下次请求才会自动使用下一个
@@ -334,8 +345,10 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 
 			fmt.Printf("[INFO] [拉黑模式] 使用 Provider: %s (Level %d) | Model: %s\n", firstProvider.Name, firstLevel, effectiveModel)
 
+			// 获取有效的端点（用户配置优先）
+			effectiveEndpoint := firstProvider.GetEffectiveEndpoint(endpoint)
 			startTime := time.Now()
-			ok, err := prs.forwardRequest(c, kind, *firstProvider, endpoint, query, clientHeaders, currentBodyBytes, isStream, effectiveModel)
+			ok, err := prs.forwardRequest(c, kind, *firstProvider, effectiveEndpoint, query, clientHeaders, currentBodyBytes, isStream, effectiveModel)
 			duration := time.Since(startTime)
 
 			if ok {
@@ -409,8 +422,10 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 				fmt.Printf("[INFO]   [%d/%d] Provider: %s | Model: %s\n", i+1, len(providersInLevel), provider.Name, effectiveModel)
 
 				// 尝试发送请求
+				// 获取有效的端点（用户配置优先）
+				effectiveEndpoint := provider.GetEffectiveEndpoint(endpoint)
 				startTime := time.Now()
-				ok, err := prs.forwardRequest(c, kind, provider, endpoint, query, clientHeaders, currentBodyBytes, isStream, effectiveModel)
+				ok, err := prs.forwardRequest(c, kind, provider, effectiveEndpoint, query, clientHeaders, currentBodyBytes, isStream, effectiveModel)
 				duration := time.Since(startTime)
 
 				if ok {
@@ -505,7 +520,26 @@ func (prs *ProviderRelayService) forwardRequest(
 ) (bool, error) {
 	targetURL := joinURL(provider.APIURL, endpoint)
 	headers := cloneMap(clientHeaders)
-	headers["Authorization"] = fmt.Sprintf("Bearer %s", provider.APIKey)
+
+	// 根据认证方式设置请求头（默认 Bearer，与 v2.2.x 保持一致）
+	authType := strings.ToLower(strings.TrimSpace(provider.ConnectivityAuthType))
+	switch authType {
+	case "x-api-key":
+		// 仅当用户显式选择 x-api-key 时使用（Anthropic 官方 API）
+		headers["x-api-key"] = provider.APIKey
+		headers["anthropic-version"] = "2023-06-01"
+	case "", "bearer":
+		// 默认使用 Bearer token（兼容所有第三方中转）
+		headers["Authorization"] = fmt.Sprintf("Bearer %s", provider.APIKey)
+	default:
+		// 自定义 Header 名
+		headerName := strings.TrimSpace(provider.ConnectivityAuthType)
+		if headerName == "" || strings.EqualFold(headerName, "custom") {
+			headerName = "Authorization"
+		}
+		headers[headerName] = provider.APIKey
+	}
+
 	if _, ok := headers["Accept"]; !ok {
 		headers["Accept"] = "application/json"
 	}
@@ -559,7 +593,7 @@ func (prs *ProviderRelayService) forwardRequest(
 		SetHeaders(headers).
 		SetQueryParams(query).
 		SetRetry(1, 500*time.Millisecond).
-		SetTimeout(3 * time.Hour) // 3小时超时，适配大型项目分析
+		SetTimeout(32 * time.Hour) // 32小时超时，适配超大型项目分析
 
 	reqBody := bytes.NewReader(bodyBytes)
 	req = req.SetBody(reqBody)
@@ -1045,7 +1079,7 @@ func (prs *ProviderRelayService) geminiProxyHandler(apiVersion string) gin.Handl
 		}()
 
 		// 获取拉黑功能开关状态
-		blacklistEnabled := prs.blacklistService.IsLevelBlacklistEnabled()
+		blacklistEnabled := prs.blacklistService.ShouldUseFixedMode()
 
 		// 【拉黑模式】：只尝试第一个 provider，失败直接返回错误（不自动降级）
 		if blacklistEnabled {
@@ -1267,4 +1301,463 @@ func parseGeminiUsageMetadata(body []byte, reqLog *ReqeustLog) {
 		return
 	}
 	mergeGeminiUsageMetadata(usage, reqLog)
+}
+
+// customCliProxyHandler 处理自定义 CLI 工具的 API 请求
+// 路由格式: /custom/:toolId/v1/messages
+// toolId 用于区分不同的 CLI 工具，对应 provider kind 为 "custom:{toolId}"
+func (prs *ProviderRelayService) customCliProxyHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// 从 URL 参数提取 toolId
+		toolId := c.Param("toolId")
+		if toolId == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "toolId is required"})
+			return
+		}
+
+		// 构建 provider kind（格式: "custom:{toolId}"）
+		kind := "custom:" + toolId
+		endpoint := "/v1/messages"
+
+		fmt.Printf("[CustomCLI] 收到请求: toolId=%s, kind=%s\n", toolId, kind)
+
+		// 读取请求体
+		var bodyBytes []byte
+		if c.Request.Body != nil {
+			data, err := io.ReadAll(c.Request.Body)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+				return
+			}
+			bodyBytes = data
+			c.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		}
+
+		isStream := gjson.GetBytes(bodyBytes, "stream").Bool()
+		requestedModel := gjson.GetBytes(bodyBytes, "model").String()
+
+		if requestedModel == "" {
+			fmt.Printf("[CustomCLI][WARN] 请求未指定模型名，无法执行模型智能降级\n")
+		}
+
+		// 加载该 CLI 工具的 providers
+		providers, err := prs.providerService.LoadProviders(kind)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to load providers for %s: %v", kind, err)})
+			return
+		}
+
+		// 过滤可用的 providers
+		active := make([]Provider, 0, len(providers))
+		skippedCount := 0
+		for _, provider := range providers {
+			if !provider.Enabled || provider.APIURL == "" || provider.APIKey == "" {
+				continue
+			}
+
+			if errs := provider.ValidateConfiguration(); len(errs) > 0 {
+				fmt.Printf("[CustomCLI][WARN] Provider %s 配置验证失败，已自动跳过: %v\n", provider.Name, errs)
+				skippedCount++
+				continue
+			}
+
+			if requestedModel != "" && !provider.IsModelSupported(requestedModel) {
+				fmt.Printf("[CustomCLI][INFO] Provider %s 不支持模型 %s，已跳过\n", provider.Name, requestedModel)
+				skippedCount++
+				continue
+			}
+
+			// 黑名单检查
+			if isBlacklisted, until := prs.blacklistService.IsBlacklisted(kind, provider.Name); isBlacklisted {
+				fmt.Printf("[CustomCLI] ⛔ Provider %s 已拉黑，过期时间: %v\n", provider.Name, until.Format("15:04:05"))
+				skippedCount++
+				continue
+			}
+
+			active = append(active, provider)
+		}
+
+		if len(active) == 0 {
+			if requestedModel != "" {
+				c.JSON(http.StatusNotFound, gin.H{
+					"error": fmt.Sprintf("没有可用的 provider 支持模型 '%s'（已跳过 %d 个不兼容的 provider）", requestedModel, skippedCount),
+				})
+			} else {
+				c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("no providers available for %s", kind)})
+			}
+			return
+		}
+
+		fmt.Printf("[CustomCLI][INFO] 找到 %d 个可用的 provider（已过滤 %d 个）：", len(active), skippedCount)
+		for _, p := range active {
+			fmt.Printf("%s ", p.Name)
+		}
+		fmt.Println()
+
+		// 按 Level 分组
+		levelGroups := make(map[int][]Provider)
+		for _, provider := range active {
+			level := provider.Level
+			if level <= 0 {
+				level = 1
+			}
+			levelGroups[level] = append(levelGroups[level], provider)
+		}
+
+		levels := make([]int, 0, len(levelGroups))
+		for level := range levelGroups {
+			levels = append(levels, level)
+		}
+		sort.Ints(levels)
+
+		fmt.Printf("[CustomCLI][INFO] 共 %d 个 Level 分组：%v\n", len(levels), levels)
+
+		query := flattenQuery(c.Request.URL.Query())
+		clientHeaders := cloneHeaders(c.Request.Header)
+
+		// 获取拉黑功能开关状态
+		blacklistEnabled := prs.blacklistService.ShouldUseFixedMode()
+
+		// 【拉黑模式】：只尝试第一个 provider，失败直接返回错误
+		if blacklistEnabled {
+			fmt.Printf("[CustomCLI][INFO] 🔒 拉黑模式已开启，禁用自动降级\n")
+
+			var firstProvider *Provider
+			var firstLevel int
+			for _, level := range levels {
+				if len(levelGroups[level]) > 0 {
+					p := levelGroups[level][0]
+					firstProvider = &p
+					firstLevel = level
+					break
+				}
+			}
+
+			if firstProvider == nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "no providers available"})
+				return
+			}
+
+			effectiveModel := firstProvider.GetEffectiveModel(requestedModel)
+			currentBodyBytes := bodyBytes
+			if effectiveModel != requestedModel && requestedModel != "" {
+				fmt.Printf("[CustomCLI][INFO] Provider %s 映射模型: %s -> %s\n", firstProvider.Name, requestedModel, effectiveModel)
+				modifiedBody, err := ReplaceModelInRequestBody(bodyBytes, effectiveModel)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("模型映射失败: %v", err)})
+					return
+				}
+				currentBodyBytes = modifiedBody
+			}
+
+			fmt.Printf("[CustomCLI][INFO] [拉黑模式] 使用 Provider: %s (Level %d) | Model: %s\n", firstProvider.Name, firstLevel, effectiveModel)
+			// 获取有效的端点（用户配置优先）
+			effectiveEndpoint := firstProvider.GetEffectiveEndpoint(endpoint)
+
+			startTime := time.Now()
+			ok, err := prs.forwardRequest(c, kind, *firstProvider, effectiveEndpoint, query, clientHeaders, currentBodyBytes, isStream, effectiveModel)
+			duration := time.Since(startTime)
+
+			if ok {
+				fmt.Printf("[CustomCLI][INFO] ✓ 成功: %s | 耗时: %.2fs\n", firstProvider.Name, duration.Seconds())
+				if err := prs.blacklistService.RecordSuccess(kind, firstProvider.Name); err != nil {
+					fmt.Printf("[CustomCLI][WARN] 清零失败计数失败: %v\n", err)
+				}
+				prs.setLastUsedProvider(kind, firstProvider.Name)
+				return
+			}
+
+			errorMsg := "未知错误"
+			if err != nil {
+				errorMsg = err.Error()
+			}
+			fmt.Printf("[CustomCLI][WARN] ✗ 失败: %s | 错误: %s | 耗时: %.2fs（拉黑模式，不降级）\n",
+				firstProvider.Name, errorMsg, duration.Seconds())
+
+			if errors.Is(err, errClientAbort) {
+				fmt.Printf("[CustomCLI][INFO] 客户端中断，跳过失败计数: %s\n", firstProvider.Name)
+			} else if err := prs.blacklistService.RecordFailure(kind, firstProvider.Name); err != nil {
+				fmt.Printf("[CustomCLI][ERROR] 记录失败到黑名单失败: %v\n", err)
+			}
+
+			c.JSON(http.StatusBadGateway, gin.H{
+				"error":    fmt.Sprintf("Provider %s 请求失败: %s", firstProvider.Name, errorMsg),
+				"provider": firstProvider.Name,
+				"level":    firstLevel,
+				"duration": fmt.Sprintf("%.2fs", duration.Seconds()),
+				"mode":     "blacklist",
+				"hint":     "拉黑模式已开启，不自动降级。如需自动降级请关闭拉黑功能",
+			})
+			return
+		}
+
+		// 【降级模式】：失败自动尝试下一个 provider
+		fmt.Printf("[CustomCLI][INFO] 🔄 降级模式（拉黑功能已关闭）\n")
+
+		var lastError error
+		var lastProvider string
+		var lastDuration time.Duration
+		totalAttempts := 0
+
+		for _, level := range levels {
+			providersInLevel := levelGroups[level]
+			fmt.Printf("[CustomCLI][INFO] === 尝试 Level %d（%d 个 provider）===\n", level, len(providersInLevel))
+
+			for i, provider := range providersInLevel {
+				totalAttempts++
+
+				effectiveModel := provider.GetEffectiveModel(requestedModel)
+				currentBodyBytes := bodyBytes
+				if effectiveModel != requestedModel && requestedModel != "" {
+					fmt.Printf("[CustomCLI][INFO] Provider %s 映射模型: %s -> %s\n", provider.Name, requestedModel, effectiveModel)
+					modifiedBody, err := ReplaceModelInRequestBody(bodyBytes, effectiveModel)
+					if err != nil {
+						fmt.Printf("[CustomCLI][ERROR] 替换模型名失败: %v\n", err)
+						continue
+					}
+					currentBodyBytes = modifiedBody
+				}
+
+				fmt.Printf("[CustomCLI][INFO]   [%d/%d] Provider: %s | Model: %s\n", i+1, len(providersInLevel), provider.Name, effectiveModel)
+				// 获取有效的端点（用户配置优先）
+				effectiveEndpoint := provider.GetEffectiveEndpoint(endpoint)
+
+				startTime := time.Now()
+				ok, err := prs.forwardRequest(c, kind, provider, effectiveEndpoint, query, clientHeaders, currentBodyBytes, isStream, effectiveModel)
+				duration := time.Since(startTime)
+
+				if ok {
+					fmt.Printf("[CustomCLI][INFO]   ✓ Level %d 成功: %s | 耗时: %.2fs\n", level, provider.Name, duration.Seconds())
+					if err := prs.blacklistService.RecordSuccess(kind, provider.Name); err != nil {
+						fmt.Printf("[CustomCLI][WARN] 清零失败计数失败: %v\n", err)
+					}
+					prs.setLastUsedProvider(kind, provider.Name)
+					return
+				}
+
+				lastError = err
+				lastProvider = provider.Name
+				lastDuration = duration
+
+				errorMsg := "未知错误"
+				if err != nil {
+					errorMsg = err.Error()
+				}
+				fmt.Printf("[CustomCLI][WARN]   ✗ Level %d 失败: %s | 错误: %s | 耗时: %.2fs\n",
+					level, provider.Name, errorMsg, duration.Seconds())
+
+				if errors.Is(err, errClientAbort) {
+					fmt.Printf("[CustomCLI][INFO] 客户端中断，跳过失败计数: %s\n", provider.Name)
+				} else if err := prs.blacklistService.RecordFailure(kind, provider.Name); err != nil {
+					fmt.Printf("[CustomCLI][ERROR] 记录失败到黑名单失败: %v\n", err)
+				}
+
+				// 发送切换通知
+				if prs.notificationService != nil {
+					nextProvider := ""
+					if i+1 < len(providersInLevel) {
+						nextProvider = providersInLevel[i+1].Name
+					} else {
+						for _, nextLevel := range levels {
+							if nextLevel > level && len(levelGroups[nextLevel]) > 0 {
+								nextProvider = levelGroups[nextLevel][0].Name
+								break
+							}
+						}
+					}
+					if nextProvider != "" {
+						prs.notificationService.NotifyProviderSwitch(SwitchNotification{
+							FromProvider: provider.Name,
+							ToProvider:   nextProvider,
+							Reason:       errorMsg,
+							Platform:     kind,
+						})
+					}
+				}
+			}
+
+			fmt.Printf("[CustomCLI][WARN] Level %d 的所有 %d 个 provider 均失败，尝试下一 Level\n", level, len(providersInLevel))
+		}
+
+		// 所有 provider 都失败
+		errorMsg := "未知错误"
+		if lastError != nil {
+			errorMsg = lastError.Error()
+		}
+		fmt.Printf("[CustomCLI][ERROR] 所有 %d 个 provider 均失败，最后尝试: %s | 错误: %s\n",
+			totalAttempts, lastProvider, errorMsg)
+
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error":          fmt.Sprintf("所有 %d 个 provider 均失败，最后错误: %s", totalAttempts, errorMsg),
+			"last_provider":  lastProvider,
+			"last_duration":  fmt.Sprintf("%.2fs", lastDuration.Seconds()),
+			"total_attempts": totalAttempts,
+		})
+	}
+}
+
+// forwardModelsRequest 共享的 /v1/models 请求转发逻辑
+// 返回 (selectedProvider, error)
+func (prs *ProviderRelayService) forwardModelsRequest(
+	c *gin.Context,
+	kind string,
+	logPrefix string,
+) error {
+	fmt.Printf("[%s] 收到 /v1/models 请求, kind=%s\n", logPrefix, kind)
+
+	// 加载 providers
+	providers, err := prs.providerService.LoadProviders(kind)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load providers"})
+		return fmt.Errorf("failed to load providers: %w", err)
+	}
+
+	// 过滤可用的 providers（启用 + URL + APIKey）
+	var activeProviders []Provider
+	for _, provider := range providers {
+		if !provider.Enabled || provider.APIURL == "" || provider.APIKey == "" {
+			continue
+		}
+
+		// 黑名单检查：跳过已拉黑的 provider
+		if isBlacklisted, until := prs.blacklistService.IsBlacklisted(kind, provider.Name); isBlacklisted {
+			fmt.Printf("[%s] ⛔ Provider %s 已拉黑，过期时间: %v\n", logPrefix, provider.Name, until.Format("15:04:05"))
+			continue
+		}
+
+		activeProviders = append(activeProviders, provider)
+	}
+
+	if len(activeProviders) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no providers available"})
+		return fmt.Errorf("no providers available")
+	}
+
+	// 按 Level 分组并排序
+	levelGroups := make(map[int][]Provider)
+	for _, provider := range activeProviders {
+		level := provider.Level
+		if level <= 0 {
+			level = 1
+		}
+		levelGroups[level] = append(levelGroups[level], provider)
+	}
+
+	levels := make([]int, 0, len(levelGroups))
+	for level := range levelGroups {
+		levels = append(levels, level)
+	}
+	sort.Ints(levels)
+
+	// 尝试第一个可用的 provider（按 Level 升序）
+	var selectedProvider *Provider
+	for _, level := range levels {
+		if len(levelGroups[level]) > 0 {
+			p := levelGroups[level][0]
+			selectedProvider = &p
+			break
+		}
+	}
+
+	if selectedProvider == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no providers available"})
+		return fmt.Errorf("no providers available after filtering")
+	}
+
+	fmt.Printf("[%s] 使用 Provider: %s | URL: %s\n", logPrefix, selectedProvider.Name, selectedProvider.APIURL)
+
+	// 构建目标 URL（拼接 provider 的 APIURL 和 /v1/models）
+	targetURL := joinURL(selectedProvider.APIURL, "/v1/models")
+
+	// 创建 HTTP 请求
+	req, err := http.NewRequest("GET", targetURL, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("创建请求失败: %v", err)})
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// 复制客户端请求头
+	for key, values := range c.Request.Header {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
+	}
+
+	// 根据认证方式设置请求头（默认 Bearer，与 v2.2.x 保持一致）
+	authType := strings.ToLower(strings.TrimSpace(selectedProvider.ConnectivityAuthType))
+	switch authType {
+	case "x-api-key":
+		req.Header.Set("x-api-key", selectedProvider.APIKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+	case "", "bearer":
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", selectedProvider.APIKey))
+	default:
+		headerName := strings.TrimSpace(selectedProvider.ConnectivityAuthType)
+		if headerName == "" || strings.EqualFold(headerName, "custom") {
+			headerName = "Authorization"
+		}
+		req.Header.Set(headerName, selectedProvider.APIKey)
+	}
+
+	// 设置默认 Accept 头
+	if req.Header.Get("Accept") == "" {
+		req.Header.Set("Accept", "application/json")
+	}
+
+	// 发送请求
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Printf("[%s] ✗ 请求失败: %s | 错误: %v\n", logPrefix, selectedProvider.Name, err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("请求失败: %v", err)})
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// 读取响应
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Printf("[%s] ✗ 读取响应失败: %s | 错误: %v\n", logPrefix, selectedProvider.Name, err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("读取响应失败: %v", err)})
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	// 复制响应头
+	for key, values := range resp.Header {
+		for _, value := range values {
+			c.Header(key, value)
+		}
+	}
+
+	fmt.Printf("[%s] ✓ 成功: %s | HTTP %d\n", logPrefix, selectedProvider.Name, resp.StatusCode)
+
+	// 返回响应
+	c.Data(resp.StatusCode, resp.Header.Get("Content-Type"), body)
+	return nil
+}
+
+// modelsHandler 处理 /v1/models 请求（OpenAI-compatible API）
+// 将请求转发到第一个可用的 provider 并注入 API Key
+func (prs *ProviderRelayService) modelsHandler(kind string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		_ = prs.forwardModelsRequest(c, kind, "Models")
+	}
+}
+
+// customModelsHandler 处理自定义 CLI 工具的 /v1/models 请求
+// 路由格式: /custom/:toolId/v1/models
+func (prs *ProviderRelayService) customModelsHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// 从 URL 参数提取 toolId
+		toolId := c.Param("toolId")
+		if toolId == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "toolId is required"})
+			return
+		}
+
+		// 构建 provider kind（格式: "custom:{toolId}"）
+		kind := "custom:" + toolId
+
+		_ = prs.forwardModelsRequest(c, kind, "CustomModels")
+	}
 }

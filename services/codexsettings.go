@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,10 +19,10 @@ const (
 	codexBackupAuthName   = "cc-studio.back.auth.json"
 	codexPreferredAuth    = "apikey"
 	codexDefaultModel     = "gpt-5-codex"
-	codexProviderKey      = "code-switch"
+	codexProviderKey      = "code-switch-r"
 	codexEnvKey           = "OPENAI_API_KEY"
 	codexWireAPI          = "responses"
-	codexTokenValue       = "code-switch"
+	codexTokenValue       = "code-switch-r"
 )
 
 type CodexSettingsService struct {
@@ -41,14 +42,22 @@ func (css *CodexSettingsService) ProxyStatus() (ClaudeProxyStatus, error) {
 		}
 		return status, err
 	}
-	provider, ok := config.ModelProviders[codexProviderKey]
-	if !ok {
-		return status, nil
-	}
+
+	// 向后兼容：同时检查 code-switch-r（新）和 code-switch（旧）两个 key
+	proxyKeys := []string{codexProviderKey, "code-switch"}
 	baseURL := css.baseURL()
-	if strings.EqualFold(config.ModelProvider, codexProviderKey) && strings.EqualFold(provider.BaseURL, baseURL) {
-		status.Enabled = true
+
+	for _, key := range proxyKeys {
+		provider, ok := config.ModelProviders[key]
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(config.ModelProvider, key) && strings.EqualFold(provider.BaseURL, baseURL) {
+			status.Enabled = true
+			return status, nil
+		}
 	}
+
 	return status, nil
 }
 
@@ -92,7 +101,6 @@ func (css *CodexSettingsService) EnableProxy() error {
 	provider := ensureProviderTable(modelProviders, codexProviderKey)
 	provider["name"] = codexProviderKey
 	provider["base_url"] = css.baseURL()
-	provider["env_key"] = codexEnvKey
 	provider["wire_api"] = codexWireAPI
 	provider["requires_openai_auth"] = false
 	modelProviders[codexProviderKey] = provider
@@ -280,4 +288,211 @@ func (css *CodexSettingsService) restoreAuthFile() error {
 		}
 	}
 	return nil
+}
+
+// ApplySingleProvider 直连应用单一供应商（仅在代理关闭时可用）
+// 将指定 provider 的配置直接写入 Codex 的 config.toml 和 auth.json
+func (css *CodexSettingsService) ApplySingleProvider(providerID int) error {
+	// 1. 检查代理状态：代理启用时禁止直连应用
+	proxyStatus, err := css.ProxyStatus()
+	if err != nil {
+		return fmt.Errorf("检查代理状态失败: %w", err)
+	}
+	if proxyStatus.Enabled {
+		return fmt.Errorf("本地代理已启用，请先关闭代理再进行直接应用")
+	}
+
+	// 2. 加载 provider 列表
+	providers, err := loadProviderSnapshot("codex")
+	if err != nil {
+		return fmt.Errorf("加载供应商配置失败: %w", err)
+	}
+
+	// 3. 查找目标 provider
+	provider, found := findProviderByID(providers, int64(providerID))
+	if !found {
+		return fmt.Errorf("未找到 ID 为 %d 的供应商", providerID)
+	}
+
+	// 4. 验证 provider 配置
+	if provider.APIURL == "" {
+		return fmt.Errorf("供应商 '%s' 未配置 API 地址", provider.Name)
+	}
+	if provider.APIKey == "" {
+		return fmt.Errorf("供应商 '%s' 未配置 API 密钥", provider.Name)
+	}
+
+	// 5. 获取配置文件路径
+	configPath, _, err := css.paths()
+	if err != nil {
+		return fmt.Errorf("获取配置路径失败: %w", err)
+	}
+
+	// 6. 创建备份
+	if _, err := CreateBackup(configPath); err != nil {
+		fmt.Printf("[CodexSettingsService] 配置文件备份失败（非阻塞）: %v\n", err)
+	}
+
+	// 7. 读取现有配置
+	var raw map[string]any
+	if data, readErr := os.ReadFile(configPath); readErr == nil && len(data) > 0 {
+		if unmarshalErr := toml.Unmarshal(data, &raw); unmarshalErr != nil {
+			return fmt.Errorf("config.toml 解析失败，请检查文件格式: %w", unmarshalErr)
+		}
+	}
+	if raw == nil {
+		raw = make(map[string]any)
+	}
+
+	// 8. 使用供应商名称作为 provider key（处理特殊字符）
+	providerKey := sanitizeProviderKey(provider.Name, int(provider.ID))
+
+	// 9. 设置 model_provider 和认证方式
+	raw["preferred_auth_method"] = codexPreferredAuth
+	raw["model_provider"] = providerKey
+
+	// 10. 设置 model_providers 配置
+	modelProviders := ensureTomlTable(raw, "model_providers")
+	providerConfig := ensureProviderTable(modelProviders, providerKey)
+	providerConfig["name"] = providerKey
+	providerConfig["base_url"] = normalizeURLTrimSlash(provider.APIURL)
+	providerConfig["wire_api"] = codexWireAPI
+	providerConfig["requires_openai_auth"] = false
+	modelProviders[providerKey] = providerConfig
+
+	// 11. 序列化并写入 config.toml
+	data, err := toml.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("序列化配置失败: %w", err)
+	}
+	cleaned := stripModelProvidersHeader(data)
+	if err := AtomicWriteBytes(configPath, cleaned); err != nil {
+		return fmt.Errorf("写入配置失败: %w", err)
+	}
+
+	// 12. 写入 auth.json
+	if err := css.writeDirectApplyAuthFile(provider.APIKey); err != nil {
+		return fmt.Errorf("写入认证文件失败: %w", err)
+	}
+
+	return nil
+}
+
+// writeDirectApplyAuthFile 写入直连应用的 auth.json
+func (css *CodexSettingsService) writeDirectApplyAuthFile(apiKey string) error {
+	authPath, _, err := css.authPaths()
+	if err != nil {
+		return err
+	}
+
+	// 备份现有 auth.json
+	if _, err := CreateBackup(authPath); err != nil {
+		fmt.Printf("[CodexSettingsService] auth.json 备份失败（非阻塞）: %v\n", err)
+	}
+
+	payload := map[string]string{
+		codexEnvKey: apiKey,
+	}
+
+	return AtomicWriteJSON(authPath, payload)
+}
+
+// sanitizeProviderKey 将供应商名称转换为合法的 TOML key
+// providerID 用于确保唯一性，避免不同 provider 生成相同 key
+func sanitizeProviderKey(name string, providerID int) string {
+	// 转小写，替换空格为连字符，移除特殊字符
+	key := strings.ToLower(name)
+	key = strings.ReplaceAll(key, " ", "-")
+	// 只保留字母、数字、连字符
+	var result strings.Builder
+	for _, r := range key {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			result.WriteRune(r)
+		}
+	}
+	if result.Len() == 0 {
+		// 名称无有效字符时，使用 provider ID 生成唯一 key
+		return fmt.Sprintf("provider-%d", providerID)
+	}
+	finalKey := result.String()
+	// 避免与代理模式的 key 冲突
+	if finalKey == codexProviderKey {
+		return fmt.Sprintf("%s-%d", finalKey, providerID)
+	}
+	return finalKey
+}
+
+// GetDirectAppliedProviderID 返回当前直连应用的 Provider ID
+// 通过读取 CLI 配置文件反推当前使用的 provider
+func (css *CodexSettingsService) GetDirectAppliedProviderID() (*int64, error) {
+	// 1. 检查代理状态
+	proxyStatus, err := css.ProxyStatus()
+	if err != nil {
+		return nil, fmt.Errorf("检查代理状态失败: %w", err)
+	}
+	if proxyStatus.Enabled {
+		return nil, nil
+	}
+
+	// 2. 读取 config.toml
+	config, err := css.readConfig()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("读取配置失败: %w", err)
+	}
+
+	// 3. 获取当前 model_provider
+	currentProviderKey := config.ModelProvider
+	if currentProviderKey == "" || currentProviderKey == codexProviderKey {
+		// 指向代理或未配置
+		return nil, nil
+	}
+
+	// 4. 获取对应的 base_url
+	provider, ok := config.ModelProviders[currentProviderKey]
+	if !ok {
+		return nil, nil
+	}
+	currentURL := provider.BaseURL
+
+	// 5. 读取 auth.json 获取 API Key
+	currentKey := css.readAuthKey()
+
+	// 6. 加载 provider 列表并匹配
+	providers, err := loadProviderSnapshot("codex")
+	if err != nil {
+		return nil, fmt.Errorf("加载供应商配置失败: %w", err)
+	}
+
+	// 7. 按 URL + Key 匹配 provider
+	for _, p := range providers {
+		if urlsEqualFold(p.APIURL, currentURL) && p.APIKey == currentKey {
+			id := p.ID
+			return &id, nil
+		}
+	}
+
+	return nil, nil
+}
+
+// readAuthKey 读取 auth.json 中的 API Key
+func (css *CodexSettingsService) readAuthKey() string {
+	authPath, _, err := css.authPaths()
+	if err != nil {
+		return ""
+	}
+
+	data, err := os.ReadFile(authPath)
+	if err != nil {
+		return ""
+	}
+
+	var payload map[string]string
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return ""
+	}
+
+	return payload[codexEnvKey]
 }

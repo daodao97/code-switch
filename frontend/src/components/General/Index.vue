@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { Call } from '@wailsio/runtime'
 import ListItem from '../Setting/ListRow.vue'
 import LanguageSwitcher from '../Setting/LanguageSwitcher.vue'
 import ThemeSetting from '../Setting/ThemeSetting.vue'
@@ -9,8 +10,8 @@ import { checkUpdate, downloadUpdate, restartApp, getUpdateState, setAutoCheckEn
 import { fetchCurrentVersion } from '../../services/version'
 import { getBlacklistSettings, updateBlacklistSettings, getLevelBlacklistEnabled, setLevelBlacklistEnabled, getBlacklistEnabled, setBlacklistEnabled, type BlacklistSettings } from '../../services/settings'
 import { fetchConfigImportStatus, importFromPath, type ConfigImportStatus } from '../../services/configImport'
-import { setAutoTestEnabled } from '../../services/connectivity'
 import { useI18n } from 'vue-i18n'
+import { extractErrorMessage } from '../../utils/error'
 
 const { t } = useI18n()
 
@@ -101,8 +102,11 @@ const persistAppSettings = async () => {
     // 同步自动更新设置到 UpdateService
     await setAutoCheckEnabled(autoUpdateEnabled.value)
 
-    // 同步自动连通性检测设置到 ConnectivityTestService
-    await setAutoTestEnabled(autoConnectivityTestEnabled.value)
+    // 同步自动可用性监控设置到 HealthCheckService（复用旧字段名）
+    await Call.ByName(
+      'codeswitch/services.HealthCheckService.SetAutoAvailabilityPolling',
+      autoConnectivityTestEnabled.value
+    )
 
     // 更新缓存
     localStorage.setItem('app-settings-heatmap', String(heatmapEnabled.value))
@@ -153,7 +157,7 @@ const checkUpdateManually = async () => {
           }
         } catch (downloadError) {
           console.error('download failed', downloadError)
-          alert('下载失败，请稍后重试')
+          alert('下载失败: ' + extractErrorMessage(downloadError))
         } finally {
           downloading.value = false
         }
@@ -180,7 +184,7 @@ const downloadAndInstall = async () => {
     }
   } catch (error) {
     console.error('download failed', error)
-    alert('下载失败，请稍后重试')
+    alert('下载失败: ' + extractErrorMessage(error))
   } finally {
     downloading.value = false
   }

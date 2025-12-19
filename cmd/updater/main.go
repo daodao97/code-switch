@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -158,6 +159,7 @@ func main() {
 	// 启动新版本
 	log.Printf("启动新版本: %s", task.TargetExe)
 	cmd := exec.Command(task.TargetExe)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	cmd.Dir = filepath.Dir(task.TargetExe)
 	if err := cmd.Start(); err != nil {
 		log.Printf("[警告] 启动新版本失败: %v", err)

@@ -77,6 +77,7 @@ const navItems: NavItem[] = [
   { path: '/prompts', icon: 'file-text', labelKey: 'sidebar.prompts', isNew: true },
   { path: '/mcp', icon: 'plug', labelKey: 'sidebar.mcp' },
   { path: '/skill', icon: 'tool', labelKey: 'sidebar.skill' },
+  { path: '/availability', icon: 'activity', labelKey: 'sidebar.availability', isNew: true },
   { path: '/speedtest', icon: 'zap', labelKey: 'sidebar.speedtest', isNew: true },
   { path: '/env', icon: 'search', labelKey: 'sidebar.env', isNew: true },
   { path: '/logs', icon: 'bar-chart', labelKey: 'sidebar.logs' },
@@ -138,6 +139,11 @@ const navigate = (path: string) => {
         <!-- Tool -->
         <svg v-else-if="item.icon === 'tool'" class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
+        </svg>
+
+        <!-- Activity -->
+        <svg v-else-if="item.icon === 'activity'" class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
         </svg>
 
         <!-- Zap -->

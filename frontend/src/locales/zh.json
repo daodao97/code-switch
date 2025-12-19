@@ -14,11 +14,76 @@
     "mcp": "MCP",
     "skill": "技能",
     "gemini": "Gemini",
+    "availability": "可用性",
     "speedtest": "测速",
     "env": "环境",
     "logs": "日志",
     "console": "控制台",
     "settings": "设置"
+  },
+  "availability": {
+    "title": "可用性监控",
+    "subtitle": "实时监控 AI 供应商的健康状态",
+    "refreshAll": "全部检测",
+    "refreshing": "检测中...",
+    "check": "检测",
+    "providers": "供应商",
+    "lastUpdate": "最后更新",
+    "nextRefresh": "下次刷新",
+    "notMonitored": "未监控",
+    "noProviders": "暂无供应商，请先添加供应商配置",
+    "stats": {
+      "operational": "正常",
+      "degraded": "延迟",
+      "failed": "故障",
+      "disabled": "未启用"
+    },
+    "settings": {
+      "title": "可用性监控设置",
+      "failureThreshold": "自动拉黑阈值",
+      "failureThresholdHint": "连续检测失败 N 次后触发拉黑",
+      "pollInterval": "检测间隔",
+      "pollIntervalHint": "后台自动检测的时间间隔",
+      "operationalThreshold": "正常状态阈值",
+      "operationalThresholdHint": "响应延迟小于此值判定为正常"
+    },
+    "editConfig": "编辑配置",
+    "enableMonitoring": "启用监控",
+    "enableToMonitor": "请先启用可用性监控",
+    "configTitle": "可用性高级配置",
+    "field": {
+      "testModel": "测试模型",
+      "testEndpoint": "测试端点",
+      "timeout": "超时时间（毫秒）"
+    },
+    "placeholder": {
+      "testModel": "留空使用平台默认模型",
+      "testEndpoint": "留空使用平台默认端点",
+      "timeout": "默认 15000"
+    },
+    "hint": {
+      "timeout": "单位毫秒，留空或 0 将使用默认 15000"
+    },
+    "default": "默认",
+    "currentModel": "当前模型",
+    "currentEndpoint": "当前端点",
+    "currentTimeout": "当前超时",
+    "defaultModel": "平台默认模型",
+    "defaultEndpoint": "平台默认端点",
+    "advancedConfig": {
+      "title": "高级配置",
+      "testModel": "测试模型",
+      "testModelHint": "默认使用低成本模型",
+      "testEndpoint": "测试端点",
+      "testEndpointHint": "留空使用默认端点",
+      "timeout": "超时时间",
+      "timeoutHint": "默认 15 秒"
+    }
+  },
+  "common": {
+    "save": "保存",
+    "saving": "保存中...",
+    "cancel": "取消"
   },
   "prompts": {
     "hero": {
@@ -141,9 +206,42 @@
         "label": "Claude proxy",
         "hostClaude": "托管 Claude Code",
         "hostCodex": "托管 Codex",
+        "hostGemini": "托管 Gemini CLI",
+        "hostOthers": "托管自定义 CLI",
         "tooltip": "通过本地转发托管 API 访问，统一管理密钥与配额。",
         "statusOn": "已托管",
         "statusOff": "未托管"
+      },
+      "customCli": {
+        "selectToolFirst": "请先选择一个 CLI 工具",
+        "noTools": "暂无自定义 CLI 工具",
+        "addTool": "添加 CLI 工具",
+        "toolName": "工具名称",
+        "toolNamePlaceholder": "例如：Droid、RooCode",
+        "configFiles": "配置文件",
+        "proxySettings": "代理注入设置",
+        "selectTool": "选择 CLI 工具",
+        "createTitle": "新建 CLI 工具",
+        "editTitle": "编辑 CLI 工具",
+        "deleteTitle": "删除 CLI 工具",
+        "deleteMessage": "确认删除 {name} 吗？此操作不可撤销。",
+        "primaryConfig": "主配置文件",
+        "labelPlaceholder": "配置文件标签",
+        "pathPlaceholder": "配置文件路径，如 ~/.droid/config.json",
+        "primary": "主文件",
+        "selectConfigFile": "选择目标配置文件",
+        "unnamed": "未命名",
+        "baseUrlFieldPlaceholder": "Base URL 字段路径，如 env.ANTHROPIC_BASE_URL",
+        "authTokenFieldPlaceholder": "认证 Token 字段路径（可选）",
+        "proxyHint": "代理注入会将本地代理地址写入指定的配置文件字段",
+        "nameRequired": "请输入工具名称",
+        "configRequired": "请至少添加一个有效的配置文件路径",
+        "createSuccess": "CLI 工具创建成功",
+        "updateSuccess": "CLI 工具更新成功",
+        "deleteSuccess": "CLI 工具已删除",
+        "saveFailed": "保存 CLI 工具失败",
+        "deleteFailed": "删除 CLI 工具失败",
+        "invalidProxyTarget": "代理注入目标配置文件无效"
       },
       "logs": {
         "view": "查看日志",
@@ -182,6 +280,14 @@
         "noData": "今日暂无数据",
         "lastUsed": "正在使用"
       },
+      "directApply": {
+        "title": "直接应用",
+        "inUse": "使用中",
+        "currentBadge": "当前使用",
+        "success": "{name} 已应用",
+        "failed": "应用失败",
+        "proxyEnabled": "请先关闭代理"
+      },
       "form": {
         "createTitle": "新增供应商",
         "editTitle": "编辑供应商",
@@ -189,11 +295,17 @@
           "name": "供应商名称",
           "apiUrl": "API 地址",
           "apiKey": "API 密钥",
+          "apiEndpoint": "API 端点（可选）",
           "officialSite": "官网地址",
           "icon": "图标",
           "enabled": "启用状态",
           "level": "优先级分组",
-          "connectivityCheck": "连通性检测",
+          "availabilityMonitor": "可用性监控",
+          "connectivityAutoBlacklist": "失败自动拉黑",
+          "availabilityTestModel": "测试模型（可选）",
+          "availabilityTestEndpoint": "测试端点（可选）",
+          "availabilityTimeout": "超时时间（毫秒）",
+          "connectivityCheck": "连通性检测（已废弃）",
           "connectivityTestModel": "测试模型",
           "connectivityTestEndpoint": "测试端点",
           "connectivityAuthType": "认证方式"
@@ -202,18 +314,29 @@
           "name": "例如：AICoding.sh",
           "apiUrl": "https://api.aicoding.sh",
           "apiKey": "sk-xxxxx",
+          "apiEndpoint": "留空使用默认，如 /v1/chat/completions",
           "officialSite": "https://vendor.com",
           "icon": "例如：aicoding、kimi",
+          "availabilityTestModel": "留空则使用平台默认模型",
+          "availabilityTestEndpoint": "例如：/v1/messages",
           "connectivityTestModel": "选择或使用默认",
           "customModel": "或输入自定义模型",
-          "customEndpoint": "或输入自定义端点"
+          "customEndpoint": "或输入自定义端点",
+          "customAuthHeader": "自定义 Header 名称（如 Authorization、X-Custom-Key）"
         },
         "hints": {
           "level": "数字越小优先级越高，Level 1 会被优先尝试，失败后依次尝试 Level 2、Level 3 等",
+          "apiEndpoint": "覆盖平台默认端点。留空使用默认（claude: /v1/messages, codex: /responses）。GLM 模型请使用 /v1/chat/completions",
+          "availabilityMonitor": "启用后会定期进行健康检查，监控此供应商的可用性状态",
+          "connectivityAutoBlacklist": "健康检查失败时自动拉黑该供应商",
+          "availabilityAdvancedConfig": "高级配置（测试模型、端点、超时）可在可用性页面中编辑",
+          "availabilityTestModel": "用于健康检查的模型，留空则使用平台默认模型",
+          "availabilityTestEndpoint": "用于健康检查的 API 端点，留空则使用平台默认端点",
+          "availabilityTimeout": "健康检查请求的超时时间（毫秒），默认 15000",
           "connectivityCheck": "启用后会定期检测此供应商的连通性，开启该选项可能会消耗少量 tokens",
           "connectivityTestModel": "选择用于连通性测试的模型，留空则使用平台默认模型",
           "connectivityTestEndpoint": "选择或输入 API 端点路径",
-          "connectivityAuthType": "选择 API 认证方式"
+          "connectivityAuthType": "默认使用 Bearer。Anthropic 官方 API 请选择 X-API-Key。如需自定义请在下方输入 Header 名称。"
         },
         "actions": {
           "cancel": "取消",
@@ -288,6 +411,11 @@
         "resetLevelFailed": "清零等级失败，请稍后重试",
         "levelHint": "有失败记录",
         "levelTitle": "黑名单等级 L{level}"
+      },
+      "errors": {
+        "loadAppSettingsFailed": "加载应用设置失败",
+        "loadHeatmapFailed": "加载使用热力图失败",
+        "loadProvidersFailed": "加载 {tab} 标签页的供应商失败"
       }
     },
     "logs": {
@@ -380,8 +508,8 @@
         "manualUpdate": "手动更新",
         "automatic_up": "自动检查更新",
         "next_up": "下次启动自动检查更新",
-        "autoConnectivityTest": "自动连通性检测",
-        "autoConnectivityTestHint": "每分钟检测已启用检测的供应商连通性",
+        "autoConnectivityTest": "自动可用性监控",
+        "autoConnectivityTestHint": "启用后会每分钟自动检测已启用监控的供应商可用性",
         "blacklistThreshold": "失败次数阈值",
         "blacklistDuration": "拉黑时长",
         "saveBlacklist": "保存配置",
@@ -440,6 +568,31 @@
         "refresh": "刷新列表",
         "create": "新增服务器"
       },
+      "import": {
+        "title": "批量导入 MCP 服务器",
+        "inputDesc": "粘贴 MCP 配置 JSON，支持 Claude Desktop 格式、数组格式或服务器映射格式。",
+        "placeholder": "粘贴 Claude Desktop 或标准 MCP 配置 JSON...",
+        "next": "下一步",
+        "parsing": "解析中...",
+        "back": "上一步",
+        "reviewTitle": "共解析 {count} 个服务器",
+        "selectAll": "全选",
+        "conflictNotice": "{count} 个服务器与现有配置冲突",
+        "strategySkip": "跳过冲突",
+        "strategyOverwrite": "覆盖现有",
+        "status": {
+          "new": "新增",
+          "conflict": "冲突"
+        },
+        "submit": "导入 {count} 个",
+        "importing": "导入中...",
+        "success": "成功导入 {count} 个 MCP 服务器",
+        "allSkipped": "所有服务器均已跳过，未导入任何内容",
+        "noServers": "未找到有效的服务器配置",
+        "needName": "单服务器配置需要提供名称",
+        "parseError": "JSON 解析失败",
+        "importError": "导入失败，请重试"
+      },
       "section": {
         "title": "已注册服务器",
         "subtitle": "数据来自 ~/.code-switch/mcp.json，修改后立即保存"
@@ -468,7 +621,8 @@
       },
       "platforms": {
         "claude": "Claude Code",
-        "codex": "Codex"
+        "codex": "Codex",
+        "gemini": "Gemini CLI"
       },
       "form": {
         "createTitle": "新增 MCP 服务器",
@@ -482,6 +636,30 @@
         "website": "官网地址",
         "tips": "提示信息",
         "tipsHint": "例如：请前往 ref.tools 获取 API Key",
+        "jsonEditor": {
+          "title": "JSON 配置",
+          "dirty": "未应用",
+          "lock": "锁定",
+          "unlock": "解锁",
+          "apply": "应用到表单",
+          "reset": "重置",
+          "hint": "此 JSON 不包含 name 与平台。名称、官网、提示与目标平台仍以表单为准。",
+          "toast": {
+            "dirtyNotApplied": "JSON 修改未应用，将按表单内容保存"
+          },
+          "errors": {
+            "empty": "请输入 JSON 内容",
+            "invalidJson": "JSON 格式无效：{message}",
+            "mustBeObject": "JSON 顶层必须是对象",
+            "typeRequired": "缺少 type 字段（必须为 stdio 或 http）",
+            "typeInvalid": "type 必须为 stdio 或 http",
+            "commandRequired": "stdio 类型需要 command",
+            "urlRequired": "http 类型需要 url",
+            "argsInvalid": "args 必须是字符串数组",
+            "envInvalid": "env 必须是对象，且所有值为字符串",
+            "applyFailed": "应用失败，请检查 JSON 内容"
+          }
+        },
         "env": "环境变量",
         "envKey": "变量名",
         "envValue": "变量值",
@@ -499,32 +677,14 @@
           "name": "请输入服务器名称",
           "command": "stdio 类型需要提供 command",
           "url": "http 类型需要提供 URL",
-          "duplicate": "名称已存在，请使用其他名称"
+          "duplicate": "名称已存在，请使用其他名称",
+          "noPlatformSelected": "请至少勾选一个平台（Claude Code 或 Codex）"
+        },
+        "warnings": {
+          "savedWithPlaceholders": "✅ 配置已保存，但因包含占位符（{vars}），未同步到 Claude/Codex。请填写占位符后重新保存。"
         },
         "deleteTitle": "删除 MCP 服务器",
         "deleteMessage": "确认删除 {name} 吗？操作不可撤销"
-      },
-      "jsonImport": {
-        "tabForm": "表单填写",
-        "tabJson": "粘贴 JSON",
-        "inputLabel": "粘贴 MCP 配置 JSON",
-        "inputPlaceholder": "支持 Claude Desktop 格式、数组格式或单服务器格式...",
-        "formatHint": "支持格式：{\"mcpServers\": {...}}、[{...}] 或 {\"command\": ...}",
-        "parse": "解析",
-        "parsing": "解析中...",
-        "emptyInput": "请输入 JSON 内容",
-        "parseError": "JSON 解析失败",
-        "fillForm": "已填充表单，请补充服务器名称",
-        "serverCount": "共 {count} 个服务器",
-        "reset": "重新输入",
-        "unnamed": "未命名",
-        "importAll": "全部导入",
-        "importSuccess": "成功导入 {count} 个 MCP 服务器",
-        "importError": "导入失败，请重试",
-        "conflictWarning": "以下服务器已存在：{names}",
-        "conflictSkip": "跳过冲突",
-        "conflictOverwrite": "覆盖现有",
-        "conflictRename": "重命名导入"
       }
     },
     "gemini": {
@@ -691,10 +851,20 @@
       "templateSaved": "模板已保存",
       "templateSaveError": "保存模板失败",
       "jsonParseError": "JSON 格式无效，请检查输入",
-      "previewTitle": "配置文件预览（只读）",
+      "previewTitle": "配置文件预览",
       "previewUnknownPath": "路径未知",
       "smartPasteSuccess": "已识别 {format} 配置并填充字段",
-      "smartPasteFailed": "未识别粘贴内容，请使用 JSON / TOML / .env 格式"
+      "smartPasteFailed": "未识别粘贴内容，请使用 JSON / TOML / .env 格式",
+      "previewEditLocked": "只读",
+      "previewEditUnlocked": "已解锁",
+      "previewApply": "应用",
+      "previewReset": "还原",
+      "previewParseError": "配置格式无效，请检查语法",
+      "previewApplySuccess": "配置已应用",
+      "saveAllFailed": "所有配置文件保存失败",
+      "savePartialSuccess": "成功 {success} 个，失败 {fail} 个",
+      "tabPreview": "预览效果",
+      "tabCurrent": "当前磁盘"
     }
   }
 }

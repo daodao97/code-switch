@@ -18,6 +18,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Update version from tag
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "Updating version to: $VERSION"
+          sed -i '' "s/const AppVersion = \"v[^\"]*\"/const AppVersion = \"v$VERSION\"/" version_service.go
+          echo "Updated version_service.go:"
+          grep "AppVersion" version_service.go
+
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
@@ -69,6 +77,27 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Update version from tag
+        shell: pwsh
+        run: |
+          $VERSION = "${{ github.ref_name }}".TrimStart('v')
+          Write-Host "Updating version to: $VERSION"
+
+          # Update version_service.go
+          $content = Get-Content version_service.go -Raw
+          $content = $content -replace 'const AppVersion = "v[^"]*"', "const AppVersion = `"v$VERSION`""
+          Set-Content version_service.go $content
+          Write-Host "Updated version_service.go:"
+          Select-String "AppVersion" version_service.go
+
+          # Update build/windows/info.json
+          $json = Get-Content build/windows/info.json -Raw | ConvertFrom-Json
+          $json.fixed.file_version = $VERSION
+          $json.info.'0000'.ProductVersion = $VERSION
+          $json | ConvertTo-Json -Depth 10 | Set-Content build/windows/info.json
+          Write-Host "Updated build/windows/info.json:"
+          Get-Content build/windows/info.json
 
       - uses: actions/setup-go@v5
         with:
@@ -157,6 +186,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+
+      - name: Update version from tag
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "Updating version to: $VERSION"
+          sed -i "s/const AppVersion = \"v[^\"]*\"/const AppVersion = \"v$VERSION\"/" version_service.go
+          echo "Updated version_service.go:"
+          grep "AppVersion" version_service.go
 
       - uses: actions/setup-go@v5
         with:
@@ -291,68 +328,82 @@ jobs:
 
           ls -lh release-assets/
 
+      - name: Generate release body
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "Generating release body for v$VERSION"
+
+          # 提取当前版本的更新内容（从标题到下一个版本标题之前）
+          # 注意：先用 tr 去除 Windows CRLF 换行符，否则 awk 匹配失败
+          tr -d '\r' < RELEASE_NOTES.md | awk "/^# Code Switch v$VERSION/,/^# Code Switch v[0-9]/" | head -n -1 > /tmp/version_notes.md
+
+          # 如果没找到版本说明，使用默认内容
+          if [ ! -s /tmp/version_notes.md ]; then
+            echo "## 更新亮点" > /tmp/version_notes.md
+            echo "- 请查看提交历史了解详细更新" >> /tmp/version_notes.md
+          fi
+
+          # 组合完整的 release body
+          cat /tmp/version_notes.md > /tmp/release_body.md
+
+          cat >> /tmp/release_body.md << 'EOF'
+
+          ---
+
+          ## 下载说明
+
+          | 平台 | 文件 | 说明 |
+          |------|------|------|
+          | **Windows (首次)** | `CodeSwitch-amd64-installer.exe` | NSIS 安装器 |
+          | **Windows (便携)** | `CodeSwitch.exe` | 直接运行 |
+          | **Windows (更新)** | `updater.exe` | 静默更新辅助 |
+          | **macOS (ARM)** | `codeswitch-macos-arm64.zip` | Apple Silicon |
+          | **macOS (Intel)** | `codeswitch-macos-amd64.zip` | Intel 芯片 |
+          | **Linux (通用)** | `CodeSwitch.AppImage` | 跨发行版便携 |
+          | **Linux (Debian/Ubuntu)** | `codeswitch_*.deb` | apt 安装 |
+          | **Linux (RHEL/Fedora)** | `codeswitch-*.rpm` | dnf/yum 安装 |
+
+          ## Linux 安装
+
+          ### AppImage (推荐)
+          ```bash
+          chmod +x CodeSwitch.AppImage
+          ./CodeSwitch.AppImage
+          ```
+          如遇 FUSE 问题：`./CodeSwitch.AppImage --appimage-extract-and-run`
+
+          ### Debian/Ubuntu
+          ```bash
+          sudo dpkg -i codeswitch_*.deb
+          sudo apt-get install -f  # 安装依赖
+          ```
+
+          ### RHEL/Fedora
+          ```bash
+          sudo rpm -i codeswitch-*.rpm
+          # 或
+          sudo dnf install codeswitch-*.rpm
+          ```
+
+          ## 文件校验
+          所有平台均提供 SHA256 校验文件（`.sha256`），下载后可验证完整性：
+          ```bash
+          # Linux/macOS
+          sha256sum -c CodeSwitch.AppImage.sha256
+
+          # Windows PowerShell
+          Get-FileHash CodeSwitch.exe | Format-List
+          ```
+          EOF
+
+          echo "Generated release body:"
+          cat /tmp/release_body.md
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           files: release-assets/*
-          body: |
-            ## 下载说明
-
-            | 平台 | 文件 | 说明 |
-            |------|------|------|
-            | **Windows (首次)** | `CodeSwitch-amd64-installer.exe` | NSIS 安装器 |
-            | **Windows (便携)** | `CodeSwitch.exe` | 直接运行 |
-            | **Windows (更新)** | `updater.exe` | 静默更新辅助 |
-            | **macOS (ARM)** | `codeswitch-macos-arm64.zip` | Apple Silicon |
-            | **macOS (Intel)** | `codeswitch-macos-amd64.zip` | Intel 芯片 |
-            | **Linux (通用)** | `CodeSwitch.AppImage` | 跨发行版便携 |
-            | **Linux (Debian/Ubuntu)** | `codeswitch_*.deb` | apt 安装 |
-            | **Linux (RHEL/Fedora)** | `codeswitch-*.rpm` | dnf/yum 安装 |
-
-            ## Linux 安装
-
-            ### AppImage (推荐)
-            ```bash
-            chmod +x CodeSwitch.AppImage
-            ./CodeSwitch.AppImage
-            ```
-            如遇 FUSE 问题：`./CodeSwitch.AppImage --appimage-extract-and-run`
-
-            ### Debian/Ubuntu
-            ```bash
-            sudo dpkg -i codeswitch_*.deb
-            sudo apt-get install -f  # 安装依赖
-            ```
-
-            ### RHEL/Fedora
-            ```bash
-            sudo rpm -i codeswitch-*.rpm
-            # 或
-            sudo dnf install codeswitch-*.rpm
-            ```
-
-            ## 支持的 Linux 发行版
-
-            | 发行版 | 版本 | 推荐格式 |
-            |--------|------|----------|
-            | Ubuntu | 24.04 LTS | DEB |
-            | Ubuntu | 22.04 LTS | AppImage |
-            | Debian | 12 (Bookworm) | DEB |
-            | Fedora | 39/40 | RPM |
-            | Arch Linux | Rolling | AppImage |
-
-            > Ubuntu 22.04 因 WebKit 版本限制，建议使用 AppImage。
-
-            ## 文件校验
-
-            所有平台均提供 SHA256 校验文件（`.sha256`），下载后可验证完整性：
-            ```bash
-            # Linux/macOS
-            sha256sum -c CodeSwitch.AppImage.sha256
-
-            # Windows PowerShell
-            Get-FileHash CodeSwitch.exe | Format-List
-            ```
+          body_path: /tmp/release_body.md
           draft: false
           prerelease: false
         env:

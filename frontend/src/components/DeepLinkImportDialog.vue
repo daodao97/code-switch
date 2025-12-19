@@ -114,6 +114,7 @@ import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ParseDeepLinkURL, ImportProviderFromDeepLink } from '../../bindings/codeswitch/services/deeplinkservice'
 import type { DeepLinkImportRequest } from '../types/deeplink'
+import { extractErrorMessage } from '../utils/error'
 
 const { t } = useI18n()
 
@@ -139,7 +140,7 @@ watch(() => props.url, async (newUrl) => {
       error.value = ''
       request.value = await ParseDeepLinkURL(newUrl) as DeepLinkImportRequest
     } catch (err: any) {
-      error.value = err.message || String(err)
+      error.value = extractErrorMessage(err)
       request.value = null
     }
   }
@@ -182,7 +183,7 @@ const handleImport = async () => {
       handleClose()
     }, 2000)
   } catch (err: any) {
-    error.value = err.message || String(err)
+    error.value = extractErrorMessage(err)
   } finally {
     importing.value = false
   }

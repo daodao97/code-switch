@@ -172,6 +172,8 @@ func (s *GeminiService) UpdateProvider(provider GeminiProvider) error {
 
 	for i, p := range s.providers {
 		if p.ID == provider.ID {
+			// 保留原有的 API Key（不允许通过更新修改）
+			provider.APIKey = p.APIKey
 			s.providers[i] = provider
 			return s.saveProviders()
 		}
@@ -194,7 +196,17 @@ func (s *GeminiService) DeleteProvider(id string) error {
 }
 
 // SwitchProvider 切换到指定供应商
+// 注意：代理启用时禁止切换（与 Claude/Codex 保持一致）
 func (s *GeminiService) SwitchProvider(id string) error {
+	// 代理检查：启用时禁止切换
+	proxyStatus, err := s.ProxyStatus()
+	if err != nil {
+		return fmt.Errorf("检查代理状态失败: %w", err)
+	}
+	if proxyStatus != nil && proxyStatus.Enabled {
+		return fmt.Errorf("本地代理已启用，请先关闭代理再切换供应商")
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -716,8 +728,9 @@ func (s *GeminiService) EnableProxy() error {
 		existingEnv = make(map[string]string)
 	}
 
-	// 设置代理 URL
+	// 设置代理 URL 和占位 API Key（与 Claude/Codex 保持一致）
 	existingEnv["GOOGLE_GEMINI_BASE_URL"] = buildProxyURL(s.relayAddr)
+	existingEnv["GEMINI_API_KEY"] = "code-switch-r"
 
 	// 写入 .env
 	if err := writeGeminiEnv(existingEnv); err != nil {
@@ -861,4 +874,77 @@ func (s *GeminiService) ReorderProviders(ids []string) error {
 
 	s.providers = newProviders
 	return s.saveProviders()
+}
+
+// ApplySingleProvider 直连应用单一供应商（别名，统一 API 命名）
+// 与 SwitchProvider 功能相同，仅在代理关闭时可用
+func (s *GeminiService) ApplySingleProvider(id string) error {
+	return s.SwitchProvider(id)
+}
+
+// GetDirectAppliedProviderID 返回当前直连应用的 Provider ID
+// 通过读取 CLI 配置文件反推当前使用的 provider
+// 返回值：
+//   - nil: 配置指向本地代理 或 无法匹配到 provider
+//   - *string: 匹配到的 provider ID
+func (s *GeminiService) GetDirectAppliedProviderID() (*string, error) {
+	// 1. 检查代理状态
+	proxyStatus, err := s.ProxyStatus()
+	if err != nil {
+		return nil, fmt.Errorf("检查代理状态失败: %w", err)
+	}
+	// 代理启用时，直连状态无意义
+	if proxyStatus != nil && proxyStatus.Enabled {
+		return nil, nil
+	}
+
+	// 2. 读取当前 .env 配置
+	envConfig, err := readGeminiEnv()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("读取 .env 失败: %w", err)
+	}
+
+	currentBaseURL := envConfig["GOOGLE_GEMINI_BASE_URL"]
+	currentAPIKey := envConfig["GEMINI_API_KEY"]
+
+	// 3. 遍历所有供应商进行匹配（CLI 配置为真源，不依赖 Enabled 状态）
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, p := range s.providers {
+		// 匹配 BaseURL（来自 provider 顶级字段或 EnvConfig）
+		providerBaseURL := p.BaseURL
+		if providerBaseURL == "" && p.EnvConfig != nil {
+			providerBaseURL = p.EnvConfig["GOOGLE_GEMINI_BASE_URL"]
+		}
+
+		// 匹配 APIKey（来自 provider 顶级字段或 EnvConfig）
+		providerAPIKey := p.APIKey
+		if providerAPIKey == "" && p.EnvConfig != nil {
+			providerAPIKey = p.EnvConfig["GEMINI_API_KEY"]
+		}
+
+		// URL + Key 双重匹配（使用 TrimRight 去除所有尾斜杠）
+		urlMatch := strings.EqualFold(
+			strings.TrimRight(strings.TrimSpace(currentBaseURL), "/"),
+			strings.TrimRight(strings.TrimSpace(providerBaseURL), "/"),
+		)
+		keyMatch := currentAPIKey == providerAPIKey
+
+		// OAuth 模式特殊处理：无 API Key 时只匹配 URL
+		if providerAPIKey == "" && currentAPIKey == "" {
+			if urlMatch || (currentBaseURL == "" && providerBaseURL == "") {
+				id := p.ID
+				return &id, nil
+			}
+		} else if urlMatch && keyMatch {
+			id := p.ID
+			return &id, nil
+		}
+	}
+
+	return nil, nil
 }

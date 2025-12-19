@@ -64,14 +64,18 @@ func AtomicWriteText(path string, text string) error {
 }
 
 // CreateBackup 创建文件备份
-// 返回备份文件路径
+// 返回备份文件路径，使用纳秒级时间戳 + O_EXCL 避免并发碰撞
 func CreateBackup(path string) (string, error) {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
 		return "", nil // 文件不存在，无需备份
 	}
-
-	// 生成备份文件名：原文件名.bak.时间戳
-	backupPath := fmt.Sprintf("%s.bak.%d", path, time.Now().Unix())
+	if err != nil {
+		return "", fmt.Errorf("检查原文件失败 %s: %w", path, err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("无法为目录创建备份: %s", path)
+	}
 
 	// 读取原文件
 	content, err := os.ReadFile(path)
@@ -79,12 +83,36 @@ func CreateBackup(path string) (string, error) {
 		return "", fmt.Errorf("读取原文件失败 %s: %w", path, err)
 	}
 
-	// 写入备份文件
-	if err := os.WriteFile(backupPath, content, 0o600); err != nil {
-		return "", fmt.Errorf("写入备份文件失败 %s: %w", backupPath, err)
+	// 重试最多 3 次，使用 O_EXCL 避免覆盖
+	for attempt := 0; attempt < 3; attempt++ {
+		backupPath := fmt.Sprintf("%s.bak.%d", path, time.Now().UnixNano())
+		f, err := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if os.IsExist(err) {
+			// 纳秒级时间戳碰撞，短暂延迟后重试
+			time.Sleep(time.Microsecond)
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("创建备份文件失败 %s: %w", backupPath, err)
+		}
+
+		// 写入内容
+		if _, err := f.Write(content); err != nil {
+			_ = f.Close()
+			_ = os.Remove(backupPath)
+			return "", fmt.Errorf("写入备份文件失败 %s: %w", backupPath, err)
+		}
+
+		// 关闭文件
+		if err := f.Close(); err != nil {
+			_ = os.Remove(backupPath)
+			return "", fmt.Errorf("关闭备份文件失败 %s: %w", backupPath, err)
+		}
+
+		return backupPath, nil
 	}
 
-	return backupPath, nil
+	return "", fmt.Errorf("创建备份失败：文件名冲突过多，请稍后重试")
 }
 
 // RestoreBackup 从备份恢复文件

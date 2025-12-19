@@ -5,6 +5,7 @@ import {
   CheckEnvConflicts
 } from '../../../bindings/codeswitch/services/envcheckservice'
 import type { EnvConflict } from '../../../bindings/codeswitch/services/models'
+import { extractErrorMessage } from '../../utils/error'
 
 const { t } = useI18n()
 
@@ -31,7 +32,7 @@ async function checkConflicts() {
     conflicts.value = await CheckEnvConflicts(activePlatform.value)
   } catch (e) {
     console.error('Failed to check conflicts:', e)
-    error.value = String(e)
+    error.value = extractErrorMessage(e)
     conflicts.value = []
   } finally {
     loading.value = false

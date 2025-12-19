@@ -292,6 +292,10 @@ html.dark .mac-sidebar-item:hover {
   border-color: rgba(255, 69, 58, 0.5);
 }
 
+.mac-toast-warning {
+  border-color: rgba(245, 158, 11, 0.5);
+}
+
 @media (max-width: 960px) {
   .mac-window {
     flex-direction: column;
@@ -538,11 +542,9 @@ html.dark .mac-sidebar-item:hover {
   position: relative;
 }
 
-/* 左侧占位符，用于居中 tab-group */
+/* 移除左侧占位符，使 tab-group 左对齐 */
 .section-header::before {
-  content: '';
-  flex: 1;
-  min-width: 0;
+  content: none;
 }
 
 .tab-group {
@@ -1382,6 +1384,14 @@ html.dark .ghost-icon:hover {
   inset: 0;
   background: rgba(15, 23, 42, 0.45);
   backdrop-filter: blur(6px);
+}
+
+.modal-overlay-noevent {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
 }
 
 .modal-wrapper {

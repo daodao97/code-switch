@@ -8,8 +8,21 @@ export interface GeminiProxyStatus {
 
 const serviceName = 'codeswitch/services.GeminiService'
 
+// 归一化代理状态字段（兼容 Wails 返回的 Go 导出字段名 Enabled/BaseURL）
+// 注意：Wails 绑定会给字段赋默认值，所以用 'in' 检查而非 ??
+const normalizeProxyStatus = (raw: any): GeminiProxyStatus => {
+  const obj = raw ?? {}
+  const enabled = 'Enabled' in obj ? obj.Enabled : obj.enabled
+  const baseURL = 'BaseURL' in obj ? obj.BaseURL : obj.base_url
+  return {
+    enabled: enabled === undefined ? false : Boolean(enabled),
+    base_url: typeof baseURL === 'string' ? baseURL : '',
+  }
+}
+
 export const fetchGeminiProxyStatus = async (): Promise<GeminiProxyStatus> => {
-  return Call.ByName(`${serviceName}.ProxyStatus`)
+  const raw = await Call.ByName(`${serviceName}.ProxyStatus`)
+  return normalizeProxyStatus(raw)
 }
 
 export const enableGeminiProxy = async (): Promise<void> => {

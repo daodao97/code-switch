@@ -1,6 +1,6 @@
 import { Call } from '@wailsio/runtime'
 
-export type McpPlatform = 'claude-code' | 'codex'
+export type McpPlatform = 'claude-code' | 'codex' | 'gemini'
 export type McpServerType = 'stdio' | 'http'
 
 export type McpServer = {
@@ -15,6 +15,7 @@ export type McpServer = {
   enable_platform: McpPlatform[]
   enabled_in_claude: boolean
   enabled_in_codex: boolean
+  enabled_in_gemini: boolean
   missing_placeholders: string[]
 }
 
@@ -27,23 +28,23 @@ export const saveMcpServers = async (servers: McpServer[]): Promise<void> => {
   await Call.ByName('codeswitch/services.MCPService.SaveServers', servers)
 }
 
-// JSON 导入相关类型
-export type MCPParseResult = {
+export type McpParseResult = {
   servers: McpServer[]
   conflicts: string[]
   needName: boolean
 }
 
-export type ConflictStrategy = 'overwrite' | 'skip' | 'rename'
+export type ConflictStrategy = 'skip' | 'overwrite'
 
-// 解析 JSON 字符串为 MCP 服务器列表
-export const parseMCPJSON = async (jsonStr: string): Promise<MCPParseResult> => {
+export const parseMcpJSON = async (jsonStr: string): Promise<McpParseResult | null> => {
   const response = await Call.ByName('codeswitch/services.ImportService.ParseMCPJSON', jsonStr)
-  return response as MCPParseResult
+  return response as McpParseResult | null
 }
 
-// 批量导入 MCP 服务器
-export const importMCPFromJSON = async (servers: McpServer[], conflictStrategy: ConflictStrategy): Promise<number> => {
-  const response = await Call.ByName('codeswitch/services.ImportService.ImportMCPFromJSON', servers, conflictStrategy)
-  return response as number
+export const importMcpServers = async (
+  servers: McpServer[],
+  strategy: ConflictStrategy
+): Promise<number> => {
+  const response = await Call.ByName('codeswitch/services.ImportService.ImportMCPServers', servers, strategy)
+  return (response as number) ?? 0
 }

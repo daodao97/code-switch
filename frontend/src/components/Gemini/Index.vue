@@ -215,7 +215,15 @@
 
         <label class="form-field">
           <span>{{ t('components.gemini.form.apiKey') }}</span>
-          <BaseInput v-model="modalState.form.apiKey" type="password" :disabled="saving" placeholder="sk-xxx" />
+          <BaseInput
+            v-model="modalState.form.apiKey"
+            type="password"
+            :disabled="saving || modalState.editing"
+            placeholder="sk-xxx"
+          />
+          <p v-if="modalState.editing" class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            {{ t('components.gemini.form.apiKeyReadonlyHint') }}
+          </p>
         </label>
 
         <label class="form-field">
