@@ -363,6 +363,23 @@ onMounted(async () => {
   border-color: var(--mac-accent);
 }
 
+/* Toggle with hint - 与 General/Index.vue 保持一致 */
+.toggle-with-hint {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.hint-text {
+  font-size: 11px;
+  color: var(--mac-text-secondary);
+  line-height: 1.4;
+  max-width: 320px;
+  text-align: right;
+  white-space: nowrap;
+}
+
 .address-display {
   font-family: monospace;
   font-size: 13px;

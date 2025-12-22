@@ -376,6 +376,10 @@ func (ns *NetworkService) configureWSLClaude(distro, proxyURL string) error {
 	script := fmt.Sprintf(`
 set -euo pipefail
 
+# 修复 WSL 中 HOME 环境变量指向 Windows 路径的问题
+HOME="$(getent passwd "$(whoami)" | cut -d: -f6)"
+export HOME
+
 mkdir -p "$HOME/.claude"
 config_path="$HOME/.claude/settings.json"
 
@@ -510,6 +514,10 @@ func (ns *NetworkService) configureWSLCodex(distro, proxyURL string) error {
 	// 写入采用 tmp + mv，并对双文件写入做失败回滚
 	script := fmt.Sprintf(`
 set -euo pipefail
+
+# 修复 WSL 中 HOME 环境变量指向 Windows 路径的问题
+HOME="$(getent passwd "$(whoami)" | cut -d: -f6)"
+export HOME
 
 mkdir -p "$HOME/.codex"
 config_path="$HOME/.codex/config.toml"
@@ -775,6 +783,10 @@ func (ns *NetworkService) configureWSLGemini(distro, proxyURL string) error {
 	// 字段级合并：仅更新 GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY；更新首次出现并删除后续重复项
 	script := fmt.Sprintf(`
 set -euo pipefail
+
+# 修复 WSL 中 HOME 环境变量指向 Windows 路径的问题
+HOME="$(getent passwd "$(whoami)" | cut -d: -f6)"
+export HOME
 
 mkdir -p "$HOME/.gemini"
 env_path="$HOME/.gemini/.env"
