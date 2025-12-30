@@ -3,6 +3,12 @@
     "title": "我的应用",
     "login": "登录"
   },
+  "update": {
+    "newVersionReady": "新版本已准备就绪",
+    "installNow": "立即安装",
+    "later": "稍后",
+    "installing": "安装中..."
+  },
   "settings": {
     "network": {
       "title": "网络设置",

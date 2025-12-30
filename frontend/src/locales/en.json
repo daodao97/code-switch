@@ -3,6 +3,12 @@
     "title": "My App",
     "login": "Login"
   },
+  "update": {
+    "newVersionReady": "New version ready",
+    "installNow": "Install Now",
+    "later": "Later",
+    "installing": "Installing..."
+  },
   "settings": {
     "network": {
       "title": "Network Settings",

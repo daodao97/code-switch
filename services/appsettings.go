@@ -23,7 +23,8 @@ type AppSettings struct {
 	AutoStart            bool `json:"auto_start"`
 	AutoUpdate           bool `json:"auto_update"`
 	AutoConnectivityTest bool `json:"auto_connectivity_test"`
-	EnableSwitchNotify   bool `json:"enable_switch_notify"` // 供应商切换通知开关
+	EnableSwitchNotify   bool `json:"enable_switch_notify"`   // 供应商切换通知开关
+	EnableRoundRobin     bool `json:"enable_round_robin"`     // 同 Level 轮询负载均衡开关（默认关闭）
 }
 
 type AppSettingsService struct {
@@ -139,9 +140,10 @@ func (as *AppSettingsService) defaultSettings() AppSettings {
 		ShowHeatmap:          true,
 		ShowHomeTitle:        true,
 		AutoStart:            autoStartEnabled,
-		AutoUpdate:           true, // 默认开启自动更新
-		AutoConnectivityTest: true, // 默认开启自动可用性监控（开箱即用）
-		EnableSwitchNotify:   true, // 默认开启切换通知
+		AutoUpdate:           true,  // 默认开启自动更新
+		AutoConnectivityTest: true,  // 默认开启自动可用性监控（开箱即用）
+		EnableSwitchNotify:   true,  // 默认开启切换通知
+		EnableRoundRobin:     false, // 默认关闭轮询（使用顺序降级）
 	}
 }
 

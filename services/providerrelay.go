@@ -33,16 +33,19 @@ type ProviderRelayService struct {
 	geminiService       *GeminiService
 	blacklistService    *BlacklistService
 	notificationService *NotificationService
+	appSettings         *AppSettingsService // 应用设置服务（用于获取轮询开关状态）
 	server              *http.Server
 	addr                string
 	lastUsed            map[string]*LastUsedProvider // 各平台最后使用的供应商
 	lastUsedMu          sync.RWMutex                 // 保护 lastUsed 的锁
+	rrMu                sync.Mutex                   // 轮询状态锁
+	rrLastStart         map[string]string            // 轮询状态：key="platform:level" → value=上次起始 Provider Name
 }
 
 // errClientAbort 表示客户端中断连接，不应计入 provider 失败次数
 var errClientAbort = errors.New("client aborted, skip failure count")
 
-func NewProviderRelayService(providerService *ProviderService, geminiService *GeminiService, blacklistService *BlacklistService, notificationService *NotificationService, addr string) *ProviderRelayService {
+func NewProviderRelayService(providerService *ProviderService, geminiService *GeminiService, blacklistService *BlacklistService, notificationService *NotificationService, appSettings *AppSettingsService, addr string) *ProviderRelayService {
 	if addr == "" {
 		addr = "127.0.0.1:18100" // 【安全修复】仅监听本地回环地址，防止 API Key 暴露到局域网
 	}
@@ -55,12 +58,14 @@ func NewProviderRelayService(providerService *ProviderService, geminiService *Ge
 		geminiService:       geminiService,
 		blacklistService:    blacklistService,
 		notificationService: notificationService,
+		appSettings:         appSettings,
 		addr:                addr,
 		lastUsed: map[string]*LastUsedProvider{
 			"claude": nil,
 			"codex":  nil,
 			"gemini": nil,
 		},
+		rrLastStart: make(map[string]string),
 	}
 }
 
@@ -93,6 +98,130 @@ func (prs *ProviderRelayService) GetAllLastUsedProviders() map[string]*LastUsedP
 	for k, v := range prs.lastUsed {
 		result[k] = v
 	}
+	return result
+}
+
+// isRoundRobinEnabled 检查轮询功能是否启用
+// 条件：1. 应用设置开关启用 2. 拉黑模式关闭（Fixed Mode 跳过轮询）
+func (prs *ProviderRelayService) isRoundRobinEnabled() bool {
+	// 检查拉黑模式是否启用（Fixed Mode 优先级高于轮询）
+	if prs.blacklistService.ShouldUseFixedMode() {
+		return false
+	}
+
+	// 检查应用设置开关
+	if prs.appSettings == nil {
+		return false
+	}
+	settings, err := prs.appSettings.GetAppSettings()
+	if err != nil {
+		return false
+	}
+	return settings.EnableRoundRobin
+}
+
+// roundRobinOrder 对同 Level 的 providers 进行轮询排序
+// 算法：基于 name 追踪，将上次起始 provider 移到末尾，实现轮询效果
+// 参数：
+//   - platform: 平台标识（claude/codex/gemini/custom:xxx）
+//   - level: 当前 Level
+//   - providers: 同 Level 的 providers 列表（已过滤、按用户排序）
+//
+// 返回：轮询排序后的 providers 列表（新切片，不修改原切片）
+func (prs *ProviderRelayService) roundRobinOrder(platform string, level int, providers []Provider) []Provider {
+	if len(providers) <= 1 {
+		return providers
+	}
+
+	// 构建 key: "platform:level"
+	key := fmt.Sprintf("%s:%d", platform, level)
+
+	prs.rrMu.Lock()
+	defer prs.rrMu.Unlock()
+
+	lastStart := prs.rrLastStart[key]
+
+	// 记录本次起始 provider 名称（更新状态）
+	prs.rrLastStart[key] = providers[0].Name
+
+	// 如果没有历史记录，返回原顺序
+	if lastStart == "" {
+		return providers
+	}
+
+	// 查找上次起始 provider 在当前列表中的位置
+	lastIdx := -1
+	for i, p := range providers {
+		if p.Name == lastStart {
+			lastIdx = i
+			break
+		}
+	}
+
+	// 上次起始 provider 不在当前列表（可能被禁用/黑名单），返回原顺序
+	if lastIdx == -1 {
+		return providers
+	}
+
+	// 构建轮询顺序：从 lastIdx+1 开始，环形遍历
+	result := make([]Provider, len(providers))
+	for i := 0; i < len(providers); i++ {
+		idx := (lastIdx + 1 + i) % len(providers)
+		result[i] = providers[idx]
+	}
+
+	// 更新本次起始 provider 名称
+	prs.rrLastStart[key] = result[0].Name
+
+	return result
+}
+
+// roundRobinOrderGemini 对 Gemini providers 进行轮询排序（复用相同逻辑）
+func (prs *ProviderRelayService) roundRobinOrderGemini(level int, providers []GeminiProvider) []GeminiProvider {
+	if len(providers) <= 1 {
+		return providers
+	}
+
+	// 构建 key: "gemini:level"
+	key := fmt.Sprintf("gemini:%d", level)
+
+	prs.rrMu.Lock()
+	defer prs.rrMu.Unlock()
+
+	lastStart := prs.rrLastStart[key]
+
+	// 记录本次起始 provider 名称
+	prs.rrLastStart[key] = providers[0].Name
+
+	// 如果没有历史记录，返回原顺序
+	if lastStart == "" {
+		return providers
+	}
+
+	// 查找上次起始 provider 在当前列表中的位置
+	lastIdx := -1
+	for i, p := range providers {
+		if p.Name == lastStart {
+			lastIdx = i
+			break
+		}
+	}
+
+	// 上次起始 provider 不在当前列表，返回原顺序
+	if lastIdx == -1 {
+		return providers
+	}
+
+	// 构建轮询顺序
+	result := make([]GeminiProvider, len(providers))
+	for i := 0; i < len(providers); i++ {
+		idx := (lastIdx + 1 + i) % len(providers)
+		result[i] = providers[idx]
+	}
+
+	// 更新本次起始 provider 名称
+	prs.rrLastStart[key] = result[0].Name
+
 	return result
 }
 
@@ -435,7 +564,12 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 		}
 
 		// 【降级模式】：拉黑功能关闭，失败自动尝试下一个 provider
-		fmt.Printf("[INFO] 🔄 降级模式（拉黑功能已关闭）\n")
+		roundRobinEnabled := prs.isRoundRobinEnabled()
+		if roundRobinEnabled {
+			fmt.Printf("[INFO] 🔄 降级模式 + 轮询负载均衡\n")
+		} else {
+			fmt.Printf("[INFO] 🔄 降级模式（顺序降级）\n")
+		}
 
 		var lastError error
 		var lastProvider string
@@ -444,6 +578,12 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 
 		for _, level := range levels {
 			providersInLevel := levelGroups[level]
+
+			// 如果启用轮询，对同 Level 的 providers 进行轮询排序
+			if roundRobinEnabled {
+				providersInLevel = prs.roundRobinOrder(kind, level, providersInLevel)
+			}
+
 			fmt.Printf("[INFO] === 尝试 Level %d（%d 个 provider）===\n", level, len(providersInLevel))
 
 			for i, provider := range providersInLevel {
@@ -1228,9 +1368,22 @@ func (prs *ProviderRelayService) geminiProxyHandler(apiVersion string) gin.Handl
 		}
 
 		// 【降级模式】：按 Level 顺序尝试所有 provider
+		roundRobinEnabled := prs.isRoundRobinEnabled()
+		if roundRobinEnabled {
+			fmt.Printf("[Gemini] 🔄 降级模式 + 轮询负载均衡\n")
+		} else {
+			fmt.Printf("[Gemini] 🔄 降级模式（顺序降级）\n")
+		}
+
 		var lastError string
 		for _, level := range sortedLevels {
 			providersInLevel := levelGroups[level]
+
+			// 如果启用轮询，对同 Level 的 providers 进行轮询排序
+			if roundRobinEnabled {
+				providersInLevel = prs.roundRobinOrderGemini(level, providersInLevel)
+			}
+
 			fmt.Printf("[Gemini] === 尝试 Level %d（%d 个 provider）===\n", level, len(providersInLevel))
 
 			for idx, provider := range providersInLevel {
@@ -1662,7 +1815,12 @@ func (prs *ProviderRelayService) customCliProxyHandler() gin.HandlerFunc {
 		}
 
 		// 【降级模式】：失败自动尝试下一个 provider
-		fmt.Printf("[CustomCLI][INFO] 🔄 降级模式（拉黑功能已关闭）\n")
+		roundRobinEnabled := prs.isRoundRobinEnabled()
+		if roundRobinEnabled {
+			fmt.Printf("[CustomCLI][INFO] 🔄 降级模式 + 轮询负载均衡\n")
+		} else {
+			fmt.Printf("[CustomCLI][INFO] 🔄 降级模式（顺序降级）\n")
+		}
 
 		var lastError error
 		var lastProvider string
@@ -1671,6 +1829,12 @@ func (prs *ProviderRelayService) customCliProxyHandler() gin.HandlerFunc {
 
 		for _, level := range levels {
 			providersInLevel := levelGroups[level]
+
+			// 如果启用轮询，对同 Level 的 providers 进行轮询排序
+			if roundRobinEnabled {
+				providersInLevel = prs.roundRobinOrder(kind, level, providersInLevel)
+			}
+
 			fmt.Printf("[CustomCLI][INFO] === 尝试 Level %d（%d 个 provider）===\n", level, len(providersInLevel))
 
 			for i, provider := range providersInLevel {

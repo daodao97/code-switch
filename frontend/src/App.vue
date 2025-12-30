@@ -2,6 +2,7 @@
 import { RouterView } from 'vue-router'
 import { onMounted } from 'vue'
 import Sidebar from './components/Sidebar.vue'
+import UpdateNotification from './components/common/UpdateNotification.vue'
 
 const applyTheme = () => {
   const userTheme = localStorage.getItem('theme')
@@ -32,6 +33,8 @@ onMounted(() => {
         </keep-alive>
       </RouterView>
     </main>
+    <!-- 更新通知弹窗 -->
+    <UpdateNotification />
   </div>
 </template>
 

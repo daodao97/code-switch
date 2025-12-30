@@ -78,6 +78,20 @@ type GitHubRelease struct {
 	} `json:"assets"`
 }
 
+// LatestRelease 静态元数据文件结构（latest.json）
+type LatestRelease struct {
+	Version     string                   `json:"version"`
+	ReleaseDate string                   `json:"release_date"`
+	Files       map[string]PlatformAsset `json:"files"`
+}
+
+// PlatformAsset 平台资产信息
+type PlatformAsset struct {
+	Name   string `json:"name"`
+	URL    string `json:"url"`
+	SHA256 string `json:"sha256,omitempty"`
+}
+
 // NewUpdateService 创建更新服务
 func NewUpdateService(currentVersion string) *UpdateService {
 	home, err := os.UserHomeDir()
@@ -145,11 +159,108 @@ func detectPortableMode() bool {
 }
 
 // CheckUpdate 检查更新（带网络容错）
+// 优先使用静态文件方式（无限流），失败后 fallback 到 GitHub API
 func (us *UpdateService) CheckUpdate() (*UpdateInfo, error) {
 	log.Printf("[UpdateService] 开始检查更新，当前版本: %s", us.currentVersion)
 
+	// 1. 优先尝试静态文件方式（无限流）
+	info, err := us.checkUpdateViaStaticFile()
+	if err == nil {
+		return info, nil
+	}
+	log.Printf("[UpdateService] 静态文件检查失败: %v，尝试 API fallback", err)
+
+	// 2. Fallback 到 GitHub API（保留兼容性）
+	return us.checkUpdateViaAPI()
+}
+
+// checkUpdateViaStaticFile 通过静态文件检查更新（无限流）
+func (us *UpdateService) checkUpdateViaStaticFile() (*UpdateInfo, error) {
+	client := &http.Client{Timeout: 15 * time.Second}
+
+	// 直接下载静态文件，不调用 API，无限流风险
+	staticURL := "https://github.com/Rogers-F/code-switch-R/releases/latest/download/latest.json"
+
+	log.Printf("[UpdateService] 请求静态文件: %s", staticURL)
+
+	resp, err := client.Get(staticURL)
+	if err != nil {
+		return nil, fmt.Errorf("下载元数据失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	var release LatestRelease
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return nil, fmt.Errorf("解析元数据失败: %w", err)
+	}
+
+	log.Printf("[UpdateService] 最新版本（静态文件）: %s", release.Version)
+
+	// 版本比较
+	needUpdate, err := us.compareVersions(us.currentVersion, release.Version)
+	if err != nil {
+		return nil, err
+	}
+
+	if needUpdate {
+		log.Printf("[UpdateService] ✅ 发现新版本: %s → %s", us.currentVersion, release.Version)
+	} else {
+		log.Printf("[UpdateService] ✅ 已是最新版本: %s", us.currentVersion)
+	}
+
+	// 查找当前平台的资产
+	platformKey := us.getPlatformKey()
+	asset, ok := release.Files[platformKey]
+	if !ok {
+		return nil, fmt.Errorf("未找到平台 %s 的安装包", platformKey)
+	}
+
+	log.Printf("[UpdateService] 下载链接（静态文件）: %s", asset.URL)
+	if asset.SHA256 != "" {
+		log.Printf("[UpdateService] SHA256: %s", asset.SHA256)
+	}
+
+	updateInfo := &UpdateInfo{
+		Available:   needUpdate,
+		Version:     release.Version,
+		DownloadURL: asset.URL,
+		SHA256:      asset.SHA256,
+	}
+
+	us.mu.Lock()
+	us.latestVersion = release.Version
+	us.downloadURL = asset.URL
+	us.latestUpdateInfo = updateInfo
+	us.mu.Unlock()
+
+	return updateInfo, nil
+}
+
+// getPlatformKey 获取当前平台的 key（用于 latest.json 的 files map）
+func (us *UpdateService) getPlatformKey() string {
+	switch runtime.GOOS {
+	case "windows":
+		return "windows"
+	case "darwin":
+		if runtime.GOARCH == "arm64" {
+			return "darwin-arm64"
+		}
+		return "darwin-amd64"
+	case "linux":
+		return "linux"
+	default:
+		return runtime.GOOS
+	}
+}
+
+// checkUpdateViaAPI 通过 GitHub API 检查更新（fallback，有限流风险）
+func (us *UpdateService) checkUpdateViaAPI() (*UpdateInfo, error) {
 	client := &http.Client{
-		Timeout: 15 * time.Second, // 增加超时时间从10秒到15秒
+		Timeout: 15 * time.Second,
 	}
 
 	releaseURL := "https://api.github.com/repos/Rogers-F/code-switch-R/releases/latest"

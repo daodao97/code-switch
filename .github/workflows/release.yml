@@ -327,6 +327,46 @@ jobs:
           cp artifacts/linux-amd64/codeswitch-*.rpm.sha256 release-assets/ 2>/dev/null || true
 
           ls -lh release-assets/
+      - name: Generate latest.json
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          REPO="${{ github.repository }}"
+          BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
+
+          # Read SHA256 checksums from existing .sha256 files
+          WIN_SHA=$(cut -d' ' -f1 release-assets/CodeSwitch.exe.sha256)
+          LINUX_SHA=$(cut -d' ' -f1 release-assets/CodeSwitch.AppImage.sha256)
+
+          cat > release-assets/latest.json << EOF
+          {
+            "version": "${VERSION}",
+            "release_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "files": {
+              "windows": {
+                "name": "CodeSwitch.exe",
+                "url": "${BASE_URL}/CodeSwitch.exe",
+                "sha256": "${WIN_SHA}"
+              },
+              "darwin-arm64": {
+                "name": "codeswitch-macos-arm64.zip",
+                "url": "${BASE_URL}/codeswitch-macos-arm64.zip"
+              },
+              "darwin-amd64": {
+                "name": "codeswitch-macos-amd64.zip",
+                "url": "${BASE_URL}/codeswitch-macos-amd64.zip"
+              },
+              "linux": {
+                "name": "CodeSwitch.AppImage",
+                "url": "${BASE_URL}/CodeSwitch.AppImage",
+                "sha256": "${LINUX_SHA}"
+              }
+            }
+          }
+          EOF
+
+          echo "Generated latest.json:"
+          cat release-assets/latest.json
+
 
       - name: Generate release body
         run: |

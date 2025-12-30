@@ -104,7 +104,7 @@ func main() {
 	notificationService := services.NewNotificationService(appSettings) // 通知服务
 	blacklistService := services.NewBlacklistService(settingsService, notificationService)
 	geminiService := services.NewGeminiService("127.0.0.1:18100")
-	providerRelay := services.NewProviderRelayService(providerService, geminiService, blacklistService, notificationService, ":18100")
+	providerRelay := services.NewProviderRelayService(providerService, geminiService, blacklistService, notificationService, appSettings, ":18100")
 	claudeSettings := services.NewClaudeSettingsService(providerRelay.Addr())
 	codexSettings := services.NewCodexSettingsService(providerRelay.Addr())
 	cliConfigService := services.NewCliConfigService(providerRelay.Addr())
