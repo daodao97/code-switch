@@ -359,11 +359,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { TabGroup, TabList, Tab, TabPanels, TabPanel } from '@headlessui/vue'
 import {
   fetchCLIConfig,
+  fetchCLIConfigSnapshots,
   saveCLIConfigFileContent,
   fetchCLITemplate,
   setCLITemplate,
@@ -372,6 +373,7 @@ import {
   type CLIConfig,
   type CLIConfigField,
   type CLIConfigFile,
+  type CLIConfigSnapshots,
 } from '../../services/cliConfig'
 import { showToast } from '../../utils/toast'
 import { extractErrorMessage } from '../../utils/error'
@@ -416,6 +418,13 @@ const currentEditingContent = ref<Record<string, string>>({})
 const currentErrors = ref<Record<string, string>>({})
 const currentTextareaRef = ref<HTMLTextAreaElement | null>(null)
 
+// 配置快照数据（来自后端 GetConfigSnapshots API）
+const snapshotsData = ref<CLIConfigSnapshots | null>(null)
+
+// 防抖和请求序号保护（防止竞态条件）
+let snapshotDebounceTimer: ReturnType<typeof setTimeout> | null = null
+let snapshotRequestSeq = 0
+
 // 获取所有预置字段的 key（包括锁定和可编辑）
 const presetFieldKeys = computed(() => {
   const keys = new Set<string>()
@@ -438,9 +447,19 @@ const platformLabels: Record<CLIPlatform, string> = {
 
 const platformLabel = computed(() => platformLabels[props.platform] || props.platform)
 
-// 检查是否有有效的供应商输入（避免空值触发注入）
+// 检查是否有有效的供应商输入（用于决定 previewMode）
+// - Claude/Codex: 需要同时有 apiKey 和 baseUrl 才视为有效（与真实 ApplySingleProvider 一致）
+// - Gemini: 任一非空即可（Gemini 允许只配置其中一个）
 const hasProviderInput = computed(() => {
-  return !!(props.providerConfig?.apiKey?.trim() || props.providerConfig?.baseUrl?.trim())
+  const apiKey = props.providerConfig?.apiKey?.trim() || ''
+  const baseUrl = props.providerConfig?.baseUrl?.trim() || ''
+
+  if (props.platform === 'gemini') {
+    // Gemini 允许只配置 apiKey 或只配置 baseUrl
+    return !!(apiKey || baseUrl)
+  }
+  // Claude/Codex 需要同时有 apiKey 和 baseUrl
+  return !!(apiKey && baseUrl)
 })
 
 const lockedFields = computed(() => {
@@ -473,6 +492,18 @@ const lockedFields = computed(() => {
         }
       }
 
+      // Codex 平台：注入 base_url（config.toml）和 OPENAI_API_KEY（auth.json）
+      if (props.platform === 'codex') {
+        // config.toml 中的 base_url 字段（支持任意 providerKey）
+        if (field.key.includes('.base_url') && baseUrl) {
+          newField.value = baseUrl
+        }
+        // auth.json 中的 OPENAI_API_KEY 字段
+        if (field.key === 'OPENAI_API_KEY' && apiKey) {
+          newField.value = apiKey
+        }
+      }
+
       return newField
     })
   }
@@ -484,214 +515,14 @@ const editableFields = computed(() => {
   return config.value?.fields.filter(f => !f.locked) || []
 })
 
-// 辅助函数：将 Gemini 供应商配置注入到 .env 内容中
-// 注意：这是简化的预览逻辑，仅展示 apiKey/baseUrl 的预期变化
-// 后端 SwitchProvider() 实际是整文件覆盖写，这里做局部补丁以便用户理解
-const applyGeminiProviderConfig = (
-  content: string,
-  providerConfig: { apiKey?: string; baseUrl?: string }
-): string => {
-  // 处理空内容的情况
-  const trimmedContent = (content || '').trim()
-  const lines = trimmedContent ? trimmedContent.split(/\r?\n/) : []
-  const newLines: string[] = []
-
-  // 定义要更新的键值对（只有非空值才写入，与后端行为一致）
-  // 按后端写入顺序：GOOGLE_GEMINI_BASE_URL → GEMINI_API_KEY
-  const updates = new Map<string, string>()
-  if (providerConfig.baseUrl?.trim()) updates.set('GOOGLE_GEMINI_BASE_URL', providerConfig.baseUrl.trim())
-  if (providerConfig.apiKey?.trim()) updates.set('GEMINI_API_KEY', providerConfig.apiKey.trim())
-
-  const foundKeys = new Set<string>()
-
-  // 1. 遍历现有行，替换或删除
-  for (const line of lines) {
-    const trimmed = line.trim()
-    // 跳过注释和空行
-    if (trimmed.startsWith('#') || !trimmed.includes('=')) {
-      newLines.push(line)
-      continue
-    }
-
-    const eqIndex = line.indexOf('=')
-    const key = line.substring(0, eqIndex).trim()
-
-    // 如果是我们关注的 key
-    if (key === 'GEMINI_API_KEY' || key === 'GOOGLE_GEMINI_BASE_URL') {
-      if (updates.has(key)) {
-        // 有新值：替换
-        newLines.push(`${key}=${updates.get(key)}`)
-        foundKeys.add(key)
-      }
-      // 没有新值：删除（不添加到 newLines）
-    } else {
-      // 其他 key 保持原样
-      newLines.push(line)
-    }
-  }
-
-  // 2. 追加不存在的 key（按后端顺序：GOOGLE_GEMINI_BASE_URL → GEMINI_API_KEY）
-  const keysToAdd = ['GOOGLE_GEMINI_BASE_URL', 'GEMINI_API_KEY']
-  for (const key of keysToAdd) {
-    if (updates.has(key) && !foundKeys.has(key)) {
-      // 确保追加前有换行（如果文件不为空且最后一行不是空行）
-      if (newLines.length > 0 && newLines[newLines.length - 1] !== '') {
-        newLines.push('')
-      }
-      newLines.push(`${key}=${updates.get(key)}`)
-    }
-  }
-
-  return newLines.join('\n')
-}
-
-// 辅助函数：将 Claude 供应商配置注入到 settings.json 内容中
-const applyClaudeProviderConfig = (
-  content: string,
-  providerConfig: { apiKey?: string; baseUrl?: string }
-): string => {
-  let data: Record<string, any> = {}
-  try {
-    if (content.trim()) {
-      const parsed = JSON.parse(content)
-      // 确保解析结果是普通对象（排除数组和 null）
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        data = parsed
-      }
-    }
-  } catch {
-    return content // 解析失败，返回原内容
-  }
-
-  // 确保 env 是普通对象（排除数组）
-  if (!data.env || typeof data.env !== 'object' || Array.isArray(data.env)) {
-    data.env = {}
-  }
-
-  // 注入供应商配置
-  if (providerConfig.baseUrl?.trim()) {
-    data.env.ANTHROPIC_BASE_URL = providerConfig.baseUrl.trim()
-  }
-  if (providerConfig.apiKey?.trim()) {
-    data.env.ANTHROPIC_AUTH_TOKEN = providerConfig.apiKey.trim()
-  }
-
-  return JSON.stringify(data, null, 2)
-}
-
-// 配置文件预览列表
+// 配置文件预览列表（来自后端 GetConfigSnapshots API）
 const previewFiles = computed((): CLIConfigFile[] => {
-  if (!config.value) return []
-
-  const rawFiles = config.value.rawFiles || []
-  const primaryPath = config.value.filePath || ''
-  const primaryFormat = config.value.configFormat
-  const files: CLIConfigFile[] = []
-
-  // 始终把主配置文件放在第一个；即使文件不存在，也给出占位项，便于在预览区创建/编辑
-  if (primaryPath) {
-    const existingPrimary = rawFiles.find(f => f.path === primaryPath)
-    if (existingPrimary) {
-      files.push(existingPrimary)
-    } else {
-      files.push({
-        path: primaryPath,
-        format: primaryFormat,
-        content: config.value.rawContent || '',
-      })
-    }
-  }
-
-  // 追加其他文件（如 Codex 的 auth.json）
-  rawFiles.forEach(f => {
-    if (!primaryPath || f.path !== primaryPath) {
-      files.push(f)
-    }
-  })
-
-  // 回退兼容：老后端可能只有 rawContent
-  if (files.length === 0 && config.value.rawContent) {
-    files.push({
-      path: config.value.filePath || '',
-      format: config.value.configFormat,
-      content: config.value.rawContent,
-    })
-  }
-
-  // 根据平台注入供应商配置，展示"激活后"的配置预览
-  // 仅当有有效输入时才注入（避免空值也触发重写）
-  if (hasProviderInput.value) {
-    if (props.platform === 'gemini') {
-      return files.map(file => {
-        const isEnvFile = file.path?.endsWith('.env') ||
-                          file.format === 'env' ||
-                          (!file.format && primaryFormat === 'env')
-        if (isEnvFile) {
-          return {
-            ...file,
-            content: applyGeminiProviderConfig(file.content, props.providerConfig!)
-          }
-        }
-        return file
-      })
-    }
-
-    if (props.platform === 'claude') {
-      return files.map(file => {
-        const isJsonFile = file.path?.endsWith('.json') ||
-                           file.format === 'json' ||
-                           (!file.format && primaryFormat === 'json')
-        if (isJsonFile) {
-          return {
-            ...file,
-            content: applyClaudeProviderConfig(file.content, props.providerConfig!)
-          }
-        }
-        return file
-      })
-    }
-  }
-
-  return files
+  return snapshotsData.value?.previewFiles || []
 })
 
-// 当前磁盘状态（不注入供应商配置，展示真实磁盘内容）
+// 当前磁盘状态（来自后端 GetConfigSnapshots API）
 const currentFiles = computed((): CLIConfigFile[] => {
-  if (!config.value) return []
-
-  const rawFiles = config.value.rawFiles || []
-  const primaryPath = config.value.filePath || ''
-  const primaryFormat = config.value.configFormat
-  const files: CLIConfigFile[] = []
-
-  if (primaryPath) {
-    const existingPrimary = rawFiles.find(f => f.path === primaryPath)
-    if (existingPrimary) {
-      files.push(existingPrimary)
-    } else {
-      files.push({
-        path: primaryPath,
-        format: primaryFormat,
-        content: config.value.rawContent || '',
-      })
-    }
-  }
-
-  rawFiles.forEach(f => {
-    if (!primaryPath || f.path !== primaryPath) {
-      files.push(f)
-    }
-  })
-
-  if (files.length === 0 && config.value.rawContent) {
-    files.push({
-      path: config.value.filePath || '',
-      format: config.value.configFormat,
-      content: config.value.rawContent,
-    })
-  }
-
-  return files
+  return snapshotsData.value?.currentFiles || []
 })
 
 // 获取字段值，支持嵌套的 env.* 字段
@@ -709,6 +540,52 @@ const toggleExpanded = () => {
   if (expanded.value && !config.value) {
     loadConfig()
   }
+}
+
+// 加载配置快照（用于 Preview/Current 对比）
+const loadSnapshots = async () => {
+  // 递增请求序号，用于忽略过期响应
+  const currentSeq = ++snapshotRequestSeq
+
+  try {
+    // 确定 previewMode：
+    // - 有有效供应商输入 => "direct"（模拟直连应用）
+    // - 无有效输入 => "current"（Preview = Current，不做任何注入）
+    const previewMode = hasProviderInput.value ? 'direct' : 'current'
+    const apiUrl = props.providerConfig?.baseUrl?.trim() || ''
+    const apiKey = props.providerConfig?.apiKey?.trim() || ''
+
+    const result = await fetchCLIConfigSnapshots(
+      props.platform,
+      apiUrl,
+      apiKey,
+      previewMode
+    )
+
+    // 忽略过期响应（有更新的请求已发出）
+    if (currentSeq !== snapshotRequestSeq) {
+      return
+    }
+
+    snapshotsData.value = result
+  } catch (error) {
+    // 忽略过期请求的错误
+    if (currentSeq !== snapshotRequestSeq) {
+      return
+    }
+    console.error('Failed to load CLI config snapshots:', error)
+    snapshotsData.value = null
+  }
+}
+
+// 防抖加载快照（用于 watch 触发，避免频繁请求）
+const loadSnapshotsDebounced = () => {
+  if (snapshotDebounceTimer) {
+    clearTimeout(snapshotDebounceTimer)
+  }
+  snapshotDebounceTimer = setTimeout(() => {
+    loadSnapshots()
+  }, 300)
 }
 
 const loadConfig = async () => {
@@ -737,6 +614,10 @@ const loadConfig = async () => {
 
     // 提取自定义字段（在预置字段列表加载后）
     extractCustomFields()
+
+    // 加载配置快照（用于 Preview/Current 标签页）
+    await loadSnapshots()
+
     // 初始化预览可编辑内容
     initPreviewEditing()
     // 重置 Current 编辑状态（切换平台/恢复默认时丢弃未保存编辑）
@@ -1251,6 +1132,13 @@ const handleApplyPreviewEdit = async (file: CLIConfigFile, index: number) => {
     extractCustomFields()
     // 通知父组件（避免后续表单提交覆盖预览保存的内容）
     emitChanges()
+    // 刷新快照数据以更新 Preview/Current 标签页
+    await loadSnapshots()
+    // 再次校验平台（loadSnapshots 是异步操作）
+    if (platform !== props.platform) {
+      console.warn('[CLIConfigEditor] Platform changed during snapshot refresh, skipping state update')
+      return
+    }
     // 仅重置当前文件的预览内容，保留其他文件的未保存编辑
     editingContent.value[key] = previewFiles.value.find((f, i) => getPreviewKey(f, i) === key)?.content || ''
     delete previewErrors.value[key]
@@ -1343,20 +1231,17 @@ const handleApplyCurrentEdit = async (file: CLIConfigFile, index: number) => {
     editableValues.value = { ...(nextConfig.editable || {}) }
     extractCustomFields()
     emitChanges()
-
-    // 修复：直接从 nextConfig 提取最新内容，避免依赖 currentFiles computed 的重新计算时序
-    // 原问题：依赖 currentFiles.value.find() 可能存在对象引用或时序问题，导致获取到旧内容
-    let newContent = ''
-    // 1. 优先从 rawFiles 中精确查找（最可靠，直接来源于磁盘读取）
-    const targetFile = nextConfig.rawFiles?.find(f => f.path === targetPath)
-    if (targetFile) {
-      newContent = targetFile.content || ''
-    } else if (nextConfig.filePath === targetPath) {
-      // 2. 回退到 rawContent（兼容老版本后端或单文件场景）
-      newContent = nextConfig.rawContent || ''
+    // 刷新快照数据以更新 Preview/Current 标签页
+    await loadSnapshots()
+    // 再次校验平台（loadSnapshots 是异步操作）
+    if (platform !== props.platform) {
+      console.warn('[CLIConfigEditor] Platform changed during snapshot refresh, skipping state update')
+      return
     }
 
-    currentEditingContent.value[key] = newContent
+    // 从刷新后的 currentFiles 获取最新内容
+    const refreshedFile = currentFiles.value.find((f, i) => getCurrentKey(f, i) === key)
+    currentEditingContent.value[key] = refreshedFile?.content || ''
     delete currentErrors.value[key]
     showToast(t('components.cliConfig.previewApplySuccess'), 'success')
   } catch (error) {
@@ -1398,11 +1283,32 @@ watch(() => props.platform, () => {
   }
 })
 
+// 监听供应商配置变化，重新加载快照（用于实时更新预览）
+// 使用防抖避免频繁请求，使用请求序号避免竞态条件
+watch(
+  () => [props.providerConfig?.apiKey, props.providerConfig?.baseUrl],
+  () => {
+    // 仅在组件展开且配置已加载时重新加载快照
+    if (expanded.value && config.value) {
+      loadSnapshotsDebounced()
+    }
+  },
+  { deep: true }
+)
+
 onMounted(() => {
   // 如果有初始值，自动展开
   if (props.modelValue && Object.keys(props.modelValue).length > 0) {
     expanded.value = true
     loadConfig()
+  }
+})
+
+onUnmounted(() => {
+  // 清理防抖定时器，避免组件卸载后仍有请求发出
+  if (snapshotDebounceTimer) {
+    clearTimeout(snapshotDebounceTimer)
+    snapshotDebounceTimer = null
   }
 })
 </script>

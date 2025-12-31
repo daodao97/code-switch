@@ -479,6 +479,33 @@ func isValidEnvKey(key string) bool {
 	return true
 }
 
+// buildGeminiEnvContent 构建 .env 文件内容（用于预览，不写入磁盘）
+// 与 writeGeminiEnv 保持一致的格式和顺序
+func buildGeminiEnvContent(envConfig map[string]string) string {
+	var lines []string
+	// 按固定顺序写入
+	keys := []string{"GOOGLE_GEMINI_BASE_URL", "GEMINI_API_KEY", "GEMINI_MODEL"}
+	for _, key := range keys {
+		if value, ok := envConfig[key]; ok && value != "" {
+			lines = append(lines, fmt.Sprintf("%s=%s", key, value))
+		}
+	}
+	// 写入其他键
+	for key, value := range envConfig {
+		if key != "GOOGLE_GEMINI_BASE_URL" && key != "GEMINI_API_KEY" && key != "GEMINI_MODEL" {
+			if value != "" {
+				lines = append(lines, fmt.Sprintf("%s=%s", key, value))
+			}
+		}
+	}
+
+	content := strings.Join(lines, "\n")
+	if len(lines) > 0 {
+		content += "\n"
+	}
+	return content
+}
+
 // writeGeminiEnv 写入 .env 文件（原子操作）
 func writeGeminiEnv(envConfig map[string]string) error {
 	dir := getGeminiDir()
