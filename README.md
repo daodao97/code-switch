@@ -28,7 +28,7 @@
 
 ## 下载
 
-[macOS](https://github.com/daodao97/code-swtich/releases) | [windows](https://github.com/daodao97/code-swtich/releases) 
+[macOS](https://github.com/daodao97/code-swtich/releases) | [Windows](https://github.com/daodao97/code-swtich/releases) | [Linux (amd64)](https://github.com/daodao97/code-swtich/releases)
 
 
 ## 预览

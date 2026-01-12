@@ -1,10 +1,11 @@
 [Desktop Entry]
-Type=Application
-Name=codeswitch
-Exec=CodeSwitch
-Icon=appicon
-Categories=Development;
-Terminal=false
-Keywords=wails
 Version=1.0
-StartupNotify=false
+Name=Code Switch
+Comment=Manage Claude & Codex relays, providers, and request logs.
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/CodeSwitch %u
+Terminal=false
+Type=Application
+Icon=CodeSwitch
+Categories=Utility;
+StartupWMClass=CodeSwitch

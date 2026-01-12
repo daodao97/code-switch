@@ -130,9 +130,76 @@ jobs:
             bin/CodeSwitch-amd64-installer.exe
             bin/CodeSwitch.exe
 
+  build-linux:
+    name: Build Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+
+      - name: Install frontend dependencies
+        run: cd frontend && npm install
+
+      - name: Update build assets
+        run: wails3 task common:update:build-assets
+
+      - name: Generate bindings
+        run: wails3 task common:generate:bindings
+
+      - name: Package Linux amd64
+        env:
+          PRODUCTION: "true"
+        run: wails3 task linux:package
+
+      - name: Normalize artifact names
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          # 疑似 Wails 上游 bug，AppImage 打包出来无法使用
+          # appimage_files=(bin/*.AppImage)
+          # [[ ${#appimage_files[@]} -gt 0 ]] || { echo "AppImage 未生成" >&2; exit 1; }
+          # mv "${appimage_files[0]}" bin/codeswitch-linux-amd64.AppImage
+
+          deb_files=(bin/*.deb)
+          [[ ${#deb_files[@]} -gt 0 ]] || { echo "deb 包未生成" >&2; exit 1; }
+          mv "${deb_files[0]}" bin/codeswitch-linux-amd64.deb
+
+          rpm_files=(bin/*.rpm)
+          [[ ${#rpm_files[@]} -gt 0 ]] || { echo "rpm 包未生成" >&2; exit 1; }
+          mv "${rpm_files[0]}" bin/codeswitch-linux-amd64.rpm
+
+          arch_files=(bin/*.pkg.tar.*)
+          [[ ${#arch_files[@]} -gt 0 ]] || { echo "Arch 包未生成" >&2; exit 1; }
+          mv "${arch_files[0]}" bin/codeswitch-linux-amd64.pkg.tar.zst
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-amd64
+          path: |
+            bin/codeswitch-linux-amd64.deb
+            bin/codeswitch-linux-amd64.rpm
+            bin/codeswitch-linux-amd64.pkg.tar.zst
+
   create-release:
     name: Create Release
-    needs: [build-macos, build-windows]
+    needs: [build-macos, build-windows, build-linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -152,6 +219,11 @@ jobs:
           cp artifacts/macos-amd64/codeswitch-macos-amd64.zip release-assets/
           cp artifacts/windows-amd64/CodeSwitch-amd64-installer.exe release-assets/
           cp artifacts/windows-amd64/CodeSwitch.exe release-assets/
+          # 疑似 Wails 上游 bug，AppImage 打包出来无法使用
+          # cp artifacts/linux-amd64/codeswitch-linux-amd64.AppImage release-assets/
+          cp artifacts/linux-amd64/codeswitch-linux-amd64.deb release-assets/
+          cp artifacts/linux-amd64/codeswitch-linux-amd64.rpm release-assets/
+          cp artifacts/linux-amd64/codeswitch-linux-amd64.pkg.tar.zst release-assets/
           ls -lh release-assets/
 
       - name: Create Release
@@ -183,6 +255,12 @@ jobs:
             - **Windows**：下载 `codeswitch-amd64-installer.exe` 运行安装，或下载 `codeswitch.exe` 直接运行
             - **macOS (Apple Silicon)**：下载 `codeswitch-macos-arm64.zip`
             - **macOS (Intel)**：下载 `codeswitch-macos-amd64.zip`
+            - **Linux (amd64)**：
+              - Debian/Ubuntu：下载 `codeswitch-linux-amd64.deb` 后执行 `sudo dpkg -i codeswitch-linux-amd64.deb`
+              - RHEL/CentOS：下载 `codeswitch-linux-amd64.rpm` 后执行 `sudo rpm -i codeswitch-linux-amd64.rpm`
+              - Arch/Manjaro：下载 `codeswitch-linux-amd64.pkg.tar.zst` 后执行 `sudo pacman -U codeswitch-linux-amd64.pkg.tar.zst`
+
+            > **注意**：由于 Wails 打包问题，暂时移除了 Linux AppImage 格式的发布。请使用上述其他格式进行安装。
           draft: false
           prerelease: false
         env:
