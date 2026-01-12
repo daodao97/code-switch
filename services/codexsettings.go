@@ -86,7 +86,6 @@ func (css *CodexSettingsService) EnableProxy() error {
 	provider := ensureProviderTable(modelProviders, codexProviderKey)
 	provider["name"] = codexProviderKey
 	provider["base_url"] = css.baseURL()
-	provider["env_key"] = codexEnvKey
 	provider["wire_api"] = codexWireAPI
 	provider["requires_openai_auth"] = false
 	modelProviders[codexProviderKey] = provider
