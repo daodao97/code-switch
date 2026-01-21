@@ -20,7 +20,10 @@
         @click="handleCardClick(card.key)"
       >
         <div class="summary-card__label">{{ card.label }}</div>
-        <div class="summary-card__value">{{ card.value }}</div>
+        <div class="summary-card__value">
+          {{ card.value }}
+          <span v-if="card.subValue" class="summary-card__sub-value">({{ card.subValue }})</span>
+        </div>
         <div class="summary-card__hint">{{ card.hint }}</div>
       </article>
     </section>
@@ -639,9 +642,8 @@ const statsCards = computed(() => {
       key: 'cacheReads',
       label: t('components.logs.summary.cache'),
       hint: t('components.logs.summary.cacheHint'),
-      value: data
-        ? `${formatTokenNumber(data.cache_read_tokens)} (${formatCacheHitRate(data.cache_read_tokens, data.input_tokens)})`
-        : '—',
+      value: data ? formatTokenNumber(data.cache_read_tokens) : '—',
+      subValue: data ? formatCacheHitRate(data.cache_read_tokens, data.input_tokens) : '',
     },
     {
       key: 'cost',
@@ -734,6 +736,13 @@ onUnmounted(() => {
   color: #94a3b8;
 }
 
+.summary-card__sub-value {
+  font-size: 0.65em;
+  font-weight: 400;
+  color: #64748b;
+  margin-left: 0.25rem;
+}
+
 html.dark .summary-card {
   border-color: rgba(255, 255, 255, 0.12);
   background: radial-gradient(circle at top, rgba(148, 163, 184, 0.2), rgba(15, 23, 42, 0.35));
@@ -749,6 +758,10 @@ html.dark .summary-card__value {
 
 html.dark .summary-card__hint {
   color: rgba(186, 194, 210, 0.8);
+}
+
+html.dark .summary-card__sub-value {
+  color: #94a3b8;
 }
 
 @media (max-width: 768px) {
