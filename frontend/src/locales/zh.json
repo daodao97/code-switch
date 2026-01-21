@@ -356,8 +356,10 @@
           "connectivityTestModel": "选择或使用默认",
           "customModel": "或输入自定义模型",
           "customEndpoint": "或输入自定义端点",
-          "customAuthHeader": "自定义 Header 名称（如 Authorization、X-Custom-Key）"
+          "customAuthHeader": "自定义 Header 名称（如 Authorization、X-Custom-Key）",
+          "searchIcon": "搜索图标..."
         },
+        "noIconResults": "未找到匹配的图标",
         "hints": {
           "level": "数字越小优先级越高，Level 1 会被优先尝试，失败后依次尝试 Level 2、Level 3 等",
           "apiEndpoint": "覆盖平台默认端点。留空使用默认（claude: /v1/messages, codex: /responses）。GLM 模型请使用 /v1/chat/completions",

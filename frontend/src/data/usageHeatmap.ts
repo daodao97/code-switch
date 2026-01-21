@@ -15,7 +15,7 @@ export type UsageHeatmapWeek = UsageHeatmapDay[]
 
 export const HEATMAP_ROWS = 8
 export const BUCKETS_PER_DAY = 3
-export const DEFAULT_HEATMAP_DAYS = 14
+export const DEFAULT_HEATMAP_DAYS = 21
 const HOURS_PER_BUCKET = 8
 const LEVELS = 4
 

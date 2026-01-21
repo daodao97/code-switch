@@ -355,8 +355,10 @@
           "connectivityTestModel": "Select or use default",
           "customModel": "Or enter custom model",
           "customEndpoint": "Or enter custom endpoint",
-          "customAuthHeader": "Custom header name (e.g. Authorization, X-Custom-Key)"
+          "customAuthHeader": "Custom header name (e.g. Authorization, X-Custom-Key)",
+          "searchIcon": "Search icons..."
         },
+        "noIconResults": "No matching icons found",
         "hints": {
           "level": "Lower numbers = higher priority. Level 1 providers are tried first, then Level 2, etc.",
           "apiEndpoint": "Override platform default endpoint. Leave blank for default (claude: /v1/messages, codex: /responses). For GLM models use /v1/chat/completions",
