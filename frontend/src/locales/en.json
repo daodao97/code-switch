@@ -495,6 +495,7 @@
         "httpCode": "HTTP",
         "stream": "Stream",
         "duration": "Duration",
+        "cost": "Cost",
         "tokens": "Tokens"
       },
       "tokenLabels": {
@@ -513,6 +514,9 @@
       "costDetail": {
         "title": "Today's Cost Breakdown",
         "empty": "No cost records today"
+      },
+      "tokenDetail": {
+        "title": "Today's Token Breakdown"
       }
     },
     "general": {

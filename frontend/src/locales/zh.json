@@ -496,6 +496,7 @@
         "httpCode": "HTTP",
         "stream": "传输",
         "duration": "耗时",
+        "cost": "金额",
         "tokens": "Token 汇总"
       },
       "tokenLabels": {
@@ -514,6 +515,9 @@
       "costDetail": {
         "title": "今日消费明细",
         "empty": "今日暂无消费记录"
+      },
+      "tokenDetail": {
+        "title": "今日 Token 明细"
       }
     },
     "general": {
