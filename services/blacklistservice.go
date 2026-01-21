@@ -794,3 +794,36 @@ func (bs *BlacklistService) IsLevelBlacklistEnabled() bool {
 	}
 	return config.EnableLevelBlacklist
 }
+
+// RetryConfig 重试配置（供 proxyHandler 使用）
+type RetryConfig struct {
+	FailureThreshold    int // 失败阈值（达到后触发拉黑）
+	RetryWaitSeconds    int // 重试等待时间（秒）
+	DedupeWindowSeconds int // 去重窗口（秒）
+}
+
+// GetRetryConfig 获取重试相关配置
+// 用于 proxyHandler 实现同 Provider 重试机制
+func (bs *BlacklistService) GetRetryConfig() *RetryConfig {
+	config, err := bs.settingsService.GetBlacklistLevelConfig()
+	if err != nil {
+		// 【修复】读取配置失败时，也尝试从数据库读取阈值
+		// 确保内层重试次数与实际拉黑阈值一致
+		defaultConfig := DefaultBlacklistLevelConfig()
+		result := &RetryConfig{
+			FailureThreshold:    defaultConfig.FailureThreshold,
+			RetryWaitSeconds:    defaultConfig.RetryWaitSeconds,
+			DedupeWindowSeconds: defaultConfig.DedupeWindowSeconds,
+		}
+		// 尝试从数据库读取阈值
+		if dbThreshold, _, dbErr := bs.settingsService.GetBlacklistSettings(); dbErr == nil && dbThreshold > 0 {
+			result.FailureThreshold = dbThreshold
+		}
+		return result
+	}
+	return &RetryConfig{
+		FailureThreshold:    config.FailureThreshold,
+		RetryWaitSeconds:    config.RetryWaitSeconds,
+		DedupeWindowSeconds: config.DedupeWindowSeconds,
+	}
+}

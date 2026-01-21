@@ -389,6 +389,22 @@ const stopCountdown = () => {
   }
 }
 
+const normalizeProviderName = (value: string) => value.trim()
+
+const syncProviderOptionsFromLogs = (items: RequestLog[]) => {
+  if (!items.length) return
+  const merged = new Set(providerOptions.value.map(normalizeProviderName).filter(Boolean))
+  for (const item of items) {
+    const name = normalizeProviderName(item.provider ?? '')
+    if (name) {
+      merged.add(name)
+    }
+  }
+  const next = Array.from(merged)
+  next.sort((a, b) => a.localeCompare(b))
+  providerOptions.value = next
+}
+
 const loadLogs = async () => {
   loading.value = true
   try {
@@ -416,7 +432,8 @@ const loadStats = async () => {
 }
 
 const loadDashboard = async () => {
-  await Promise.all([loadLogs(), loadStats()])
+  await Promise.all([loadLogs(), loadStats(), loadProviderOptions()])
+  syncProviderOptionsFromLogs(logs.value)
 }
 
 const pagedLogs = computed(() => {
@@ -557,10 +574,8 @@ const summaryDateLabel = computed(() => {
 const loadProviderOptions = async () => {
   try {
     const list = await fetchLogProviders(filters.platform)
-    providerOptions.value = list ?? []
-    if (filters.provider && !providerOptions.value.includes(filters.provider)) {
-      filters.provider = ''
-    }
+    providerOptions.value = (list ?? []).map(normalizeProviderName).filter(Boolean)
+    providerOptions.value.sort((a, b) => a.localeCompare(b))
   } catch (error) {
     console.error('failed to load provider options', error)
   }
@@ -570,11 +585,14 @@ watch(
   () => filters.platform,
   async () => {
     await loadProviderOptions()
+    if (filters.provider && !providerOptions.value.includes(filters.provider)) {
+      filters.provider = ''
+    }
   },
 )
 
 onMounted(async () => {
-  await Promise.all([loadDashboard(), loadProviderOptions()])
+  await loadDashboard()
   startCountdown()
 })
 

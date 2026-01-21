@@ -91,13 +91,16 @@ export async function restoreDefaultConfig(platform: CLIPlatform): Promise<void>
 }
 
 // 获取配置快照（用于 Preview/Current 对比）
-// 预览规则：
-//   - 若传入 apiUrl/apiKey 任一非空：模拟 ApplySingleProvider() 的写入结果（直连模式）
-//   - 若二者都为空：模拟 EnableProxy() 的写入结果（代理模式）
+// previewMode 参数：
+//   - "current": Preview = Current（不做任何注入，适用于空输入场景）
+//   - "direct": 模拟 ApplySingleProvider() 的写入结果（直连模式）
+//   - "proxy": 模拟 EnableProxy() 的写入结果（代理模式）
+//   - "" (空字符串): 兼容旧逻辑，若 apiUrl/apiKey 任一非空则为 direct，否则为 proxy
 export async function fetchCLIConfigSnapshots(
   platform: CLIPlatform,
   apiUrl: string = '',
-  apiKey: string = ''
+  apiKey: string = '',
+  previewMode: 'current' | 'direct' | 'proxy' | '' = ''
 ): Promise<CLIConfigSnapshots> {
-  return Call.ByName(`${SERVICE_PATH}.GetConfigSnapshots`, platform, apiUrl, apiKey)
+  return Call.ByName(`${SERVICE_PATH}.GetConfigSnapshots`, platform, apiUrl, apiKey, previewMode)
 }

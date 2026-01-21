@@ -3,6 +3,40 @@
     "title": "我的应用",
     "login": "登录"
   },
+  "update": {
+    "newVersionReady": "新版本已准备就绪",
+    "installNow": "立即安装",
+    "later": "稍后",
+    "installing": "安装中..."
+  },
+  "settings": {
+    "network": {
+      "title": "网络设置",
+      "listenMode": "监听模式",
+      "modes": {
+        "localhost": "仅本地 (127.0.0.1)",
+        "wslAuto": "WSL 自动检测",
+        "lan": "局域网 (0.0.0.0)",
+        "custom": "自定义地址"
+      },
+      "customAddress": "自定义地址",
+      "currentAddress": "当前监听地址",
+      "lanWarningTitle": "安全警告",
+      "lanWarningText": "局域网模式会将 API 密钥暴露给局域网内的其他设备，请仅在可信环境中使用。",
+      "wslTitle": "WSL 配置",
+      "wslAutoConfig": "WSL 自动配置",
+      "wslAutoConfigHint": "自动配置 WSL 中的 CLI 工具使用宿主机代理",
+      "wslStatus": "WSL 状态",
+      "wslDetected": "已检测到 WSL",
+      "wslNotDetected": "未检测到 WSL",
+      "wslDistros": "已检测的发行版",
+      "targetCli": "目标 CLI 工具",
+      "configureNow": "立即配置",
+      "configureSuccess": "WSL CLI 工具配置成功",
+      "configureFailed": "配置 WSL CLI 工具失败",
+      "saveFailed": "保存网络设置失败"
+    }
+  },
   "menus": {
     "general": "通用设置",
     "shortcut": "快捷键",
@@ -341,6 +375,7 @@
         "actions": {
           "cancel": "取消",
           "save": "保存",
+          "saveAndApply": "保存并应用",
           "delete": "删除",
           "testConnectivity": "测试连通性",
           "testing": "测试中..."
@@ -500,6 +535,8 @@
         "autoStart": "开机自启动",
         "switchNotify": "切换通知",
         "switchNotifyHint": "供应商切换或拉黑时发送系统通知",
+        "roundRobin": "同 Level 轮询",
+        "roundRobinHint": "启用后同 Level 的供应商轮流处理请求，关闭则始终从第一个开始",
         "autoUpdate": "自动更新",
         "lastCheck": "上次检查",
         "currentVersion": "当前版本",
@@ -748,15 +785,30 @@
         "title": "Claude Skill",
         "lead": "从 Skill 仓库中获取 Claude Skill，点击右上角按钮可添加更多 Skill 仓库。"
       },
+      "platform": {
+        "claude": "Claude Code",
+        "codex": "Codex"
+      },
+      "groups": {
+        "project": "项目级技能",
+        "user": "用户级技能",
+        "available": "可用技能"
+      },
       "actions": {
         "back": "返回首页",
         "loading": "处理中...",
         "refresh": "刷新列表",
         "view": "查看 GitHub",
-        "install": "安装到 Claude Code",
+        "install": "安装",
         "uninstall": "卸载",
         "installError": "安装 {name} 失败，请重试",
-        "uninstallError": "卸载 {name} 失败，请重试"
+        "uninstallError": "卸载 {name} 失败，请重试",
+        "toggle": "启用/禁用",
+        "viewContent": "查看内容",
+        "hideContent": "收起内容",
+        "openFolder": "打开文件夹",
+        "loadFailed": "加载内容失败",
+        "toggleError": "切换技能状态失败"
       },
       "list": {
         "title": "可用技能",
@@ -765,7 +817,23 @@
         "empty": "仓库中没有可用技能。",
         "error": "技能列表加载失败，请检查网络后重试。",
         "noDescription": "SKILL.md 未提供描述",
-        "missingRepo": "缺少对应的仓库信息，无法安装"
+        "missingRepo": "缺少对应的仓库信息，无法安装",
+        "noInstalled": "当前没有已安装的技能"
+      },
+      "install": {
+        "title": "选择安装位置",
+        "desc": "将 {name} 安装到：",
+        "locationLabel": "安装位置",
+        "userLevel": "用户级（全局）",
+        "userLevelDesc": "~/.{platform}/skills/",
+        "projectLevel": "项目级（当前目录）",
+        "projectLevelDesc": "./.{platform}/skills/",
+        "gitWarning": "项目级技能可能需要添加到 .gitignore",
+        "installing": "安装中...",
+        "confirm": "确认安装"
+      },
+      "license": {
+        "complete": "完整条款见 {file}"
       },
       "repos": {
         "open": "管理仓库",

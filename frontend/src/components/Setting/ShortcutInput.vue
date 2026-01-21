@@ -188,6 +188,7 @@ const placeholderText = computed(() => t('components.shortcut.placeholder'))
 
 .mac-shortcut-input:focus-within {
   border-color: var(--mac-accent);
+  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.25); /* fallback for old WebKit */
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--mac-accent) 25%, transparent);
 }
 
@@ -229,6 +230,7 @@ const placeholderText = computed(() => t('components.shortcut.placeholder'))
 }
 
 .mac-shortcut-clear:hover {
+  background: rgba(110, 110, 115, 0.15); /* fallback for old WebKit */
   background: color-mix(in srgb, var(--mac-text-secondary) 15%, transparent);
   color: var(--mac-text);
 }

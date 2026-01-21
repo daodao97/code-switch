@@ -75,16 +75,26 @@ func (css *ClaudeSettingsService) EnableProxy() error {
 		return err
 	}
 
+	// 幂等化检查：状态文件存在则视为已启用，不覆盖基线
+	stateExists, err := ProxyStateExists("claude")
+	if err != nil {
+		return err
+	}
+
 	// 读取现有配置（最小侵入模式：保留用户的其他配置）
 	var existingData map[string]interface{}
+	fileExisted := false
 	if _, statErr := os.Stat(settingsPath); statErr == nil {
+		fileExisted = true
 		content, readErr := os.ReadFile(settingsPath)
 		if readErr != nil {
 			return readErr
 		}
-		// 创建备份
-		if err := os.WriteFile(backupPath, content, 0o600); err != nil {
-			return err
+		// 仅首次启用时创建备份，避免重复 Enable 覆盖基线
+		if !stateExists {
+			if err := os.WriteFile(backupPath, content, 0o600); err != nil {
+				return err
+			}
 		}
 		// 解析现有配置（仅当文件非空时）
 		if len(content) > 0 {
@@ -105,6 +115,31 @@ func (css *ClaudeSettingsService) EnableProxy() error {
 		return fmt.Errorf("无法读取 settings.json: %w", statErr)
 	}
 
+	// 首次启用：记录启用前的关键字段基线到状态文件
+	if !stateExists {
+		envRaw, _ := existingData["env"].(map[string]interface{})
+		state := &ProxyState{
+			TargetPath:        settingsPath,
+			FileExisted:       fileExisted,
+			EnvExisted:        envRaw != nil,
+			InjectedBaseURL:   css.baseURL(),
+			InjectedAuthToken: claudeAuthTokenValue,
+		}
+		if envRaw != nil {
+			if v, ok := envRaw["ANTHROPIC_BASE_URL"]; ok {
+				s := anyToString(v)
+				state.OriginalBaseURL = &s
+			}
+			if v, ok := envRaw["ANTHROPIC_AUTH_TOKEN"]; ok {
+				s := anyToString(v)
+				state.OriginalAuthToken = &s
+			}
+		}
+		if err := SaveProxyState("claude", state); err != nil {
+			return err
+		}
+	}
+
 	// 仅更新代理相关字段，保留其他配置（如 model, alwaysThinkingEnabled, enabledPlugins）
 	env, ok := existingData["env"].(map[string]interface{})
 	if !ok {
@@ -119,21 +154,99 @@ func (css *ClaudeSettingsService) EnableProxy() error {
 }
 
 func (css *ClaudeSettingsService) DisableProxy() error {
-	settingsPath, backupPath, err := css.paths()
+	settingsPath, _, err := css.paths()
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(settingsPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+
+	// 读取当前 settings.json（保留用户在代理期间的所有编辑）
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// 配置文件不存在，清理状态文件后返回
+			return DeleteProxyState("claude")
+		}
 		return err
 	}
-	if _, err := os.Stat(backupPath); err == nil {
-		if err := os.Rename(backupPath, settingsPath); err != nil {
-			return err
+
+	payload := make(map[string]interface{})
+	if len(content) > 0 {
+		if err := json.Unmarshal(content, &payload); err != nil {
+			return fmt.Errorf("settings.json 解析失败，请检查文件格式: %w", err)
 		}
-	} else if errors.Is(err, os.ErrNotExist) {
-		return nil
 	}
-	return nil
+	if payload == nil {
+		payload = make(map[string]interface{})
+	}
+
+	// 尝试加载状态文件
+	state, stateErr := LoadProxyState("claude")
+	if stateErr != nil {
+		// 兜底：状态文件缺失/损坏时，仅在字段仍等于代理值时才删除
+		// 避免误删用户自定义的直连配置
+		env, _ := payload["env"].(map[string]interface{})
+		if env == nil {
+			return DeleteProxyState("claude")
+		}
+
+		changed := false
+		proxyBaseURL := css.baseURL()
+		currentBaseURL := anyToString(env["ANTHROPIC_BASE_URL"])
+		if strings.EqualFold(
+			strings.TrimSuffix(strings.TrimSpace(currentBaseURL), "/"),
+			strings.TrimSuffix(strings.TrimSpace(proxyBaseURL), "/"),
+		) {
+			delete(env, "ANTHROPIC_BASE_URL")
+			changed = true
+		}
+		if anyToString(env["ANTHROPIC_AUTH_TOKEN"]) == claudeAuthTokenValue {
+			delete(env, "ANTHROPIC_AUTH_TOKEN")
+			changed = true
+		}
+
+		if changed {
+			payload["env"] = env
+			if err := AtomicWriteJSON(settingsPath, payload); err != nil {
+				return err
+			}
+		}
+
+		// 清理状态文件（存在但损坏时尤为重要）
+		return DeleteProxyState("claude")
+	}
+
+	// 有状态文件：按基线做"手术式"恢复
+	env, _ := payload["env"].(map[string]interface{})
+	if env == nil {
+		env = make(map[string]interface{})
+	}
+
+	// 恢复或删除 ANTHROPIC_BASE_URL
+	if state.OriginalBaseURL != nil {
+		env["ANTHROPIC_BASE_URL"] = *state.OriginalBaseURL
+	} else {
+		delete(env, "ANTHROPIC_BASE_URL")
+	}
+
+	// 恢复或删除 ANTHROPIC_AUTH_TOKEN
+	if state.OriginalAuthToken != nil {
+		env["ANTHROPIC_AUTH_TOKEN"] = *state.OriginalAuthToken
+	} else {
+		delete(env, "ANTHROPIC_AUTH_TOKEN")
+	}
+
+	// 若 env 变空且启用前不存在 env，则移除整个 env 对象
+	if len(env) == 0 && !state.EnvExisted {
+		delete(payload, "env")
+	} else {
+		payload["env"] = env
+	}
+
+	if err := AtomicWriteJSON(settingsPath, payload); err != nil {
+		return err
+	}
+
+	return DeleteProxyState("claude")
 }
 
 func (css *ClaudeSettingsService) paths() (settingsPath string, backupPath string, err error) {

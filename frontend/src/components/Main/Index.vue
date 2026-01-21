@@ -792,6 +792,15 @@
                   <BaseButton type="submit">
                     {{ t('components.main.form.actions.save') }}
                   </BaseButton>
+                  <!-- 保存并应用：仅在编辑模式、非代理模式、非 others 平台时显示 -->
+                  <BaseButton
+                    v-if="modalState.editingId && modalState.tabId !== 'others' && !activeProxyState"
+                    type="button"
+                    variant="primary"
+                    @click="submitAndApplyModal"
+                  >
+                    {{ t('components.main.form.actions.saveAndApply') }}
+                  </BaseButton>
                 </footer>
       </form>
       </BaseModal>
@@ -2756,9 +2765,10 @@ const submitModal = async () => {
     await persistProviders(modalState.tabId)
   }
 
-  // 保存 CLI 配置（如果有编辑）
+  // 保存 CLI 配置（仅支持 claude/codex/gemini 平台）
   const cliConfig = modalState.form.cliConfig
-  if (cliConfig && Object.keys(cliConfig).length > 0) {
+  const supportedPlatforms: CLIPlatform[] = ['claude', 'codex', 'gemini']
+  if (cliConfig && Object.keys(cliConfig).length > 0 && supportedPlatforms.includes(modalState.tabId as CLIPlatform)) {
     try {
       await saveCLIConfig(modalState.tabId as CLIPlatform, cliConfig)
     } catch (error) {
@@ -2770,6 +2780,42 @@ const submitModal = async () => {
 
   // 通知可用性页面刷新
   window.dispatchEvent(new CustomEvent('providers-updated'))
+}
+
+// 保存并应用：先保存供应商配置，再直连应用到 CLI
+const submitAndApplyModal = async () => {
+  // 1. 执行普通保存逻辑
+  const editingId = modalState.editingId
+  const tabId = modalState.tabId as ProviderTab
+  if (!editingId || tabId === 'others') return
+
+  // 获取当前编辑的卡片
+  const editingCard = cards[tabId]?.find(c => c.id === editingId)
+  if (!editingCard) return
+
+  // 调用标准保存流程
+  await submitModal()
+
+  // 2. 保存成功后，应用到 CLI（直连模式）
+  try {
+    if (tabId === 'claude') {
+      await Call.ByName('codeswitch/services.ClaudeSettingsService.ApplySingleProvider', editingId)
+    } else if (tabId === 'codex') {
+      await Call.ByName('codeswitch/services.CodexSettingsService.ApplySingleProvider', editingId)
+    } else if (tabId === 'gemini') {
+      // Gemini 使用字符串 ID，需要从 cache 中找到原始 provider
+      const index = cards.gemini.findIndex(c => c.id === editingId)
+      if (index !== -1 && geminiProvidersCache.value[index]) {
+        const realId = geminiProvidersCache.value[index].id
+        await Call.ByName('codeswitch/services.GeminiService.ApplySingleProvider', realId)
+      }
+    }
+    await refreshDirectAppliedStatus(tabId)
+    showToast(t('components.main.directApply.success', { name: editingCard.name }), 'success')
+  } catch (error) {
+    console.error('Apply after save failed', error)
+    showToast(t('components.main.directApply.failed'), 'error')
+  }
 }
 
 const configure = (card: AutomationCard) => {
@@ -2961,6 +3007,13 @@ const onToolSelect = async () => {
   }
 }
 
+// 仅在只有一个配置文件时自动选中，避免多配置场景下造成"意外选择"
+const getAutoSelectedProxyTargetFileId = () => {
+  const files = cliToolModalState.form.configFiles
+  if (files.length === 1) return files[0].id
+  return ''
+}
+
 // 打开新建 CLI 工具模态框
 const openCliToolModal = () => {
   cliToolModalState.editingId = null
@@ -2972,6 +3025,8 @@ const openCliToolModal = () => {
     format: 'json',
     isPrimary: true,
   }]
+  // 默认占位行保持全空，允许用户选择不配置代理注入
+  // 保存时会自动补齐 targetFileId（如果用户填写了字段且只有一个配置文件）
   cliToolModalState.form.proxyInjection = [{
     targetFileId: '',
     baseUrlField: '',
@@ -3003,10 +3058,12 @@ const editCurrentCliTool = async () => {
         format: 'json' as const,
         isPrimary: true,
       }]
+  // 加载已有的代理注入配置，默认占位行保持全空
+  // 保存时会自动补齐 targetFileId（如果用户填写了字段且只有一个配置文件）
   cliToolModalState.form.proxyInjection = tool.proxyInjection && tool.proxyInjection.length > 0
     ? tool.proxyInjection.map(pi => ({
-        targetFileId: pi.targetFileId,
-        baseUrlField: pi.baseUrlField,
+        targetFileId: pi.targetFileId ?? '',
+        baseUrlField: pi.baseUrlField ?? '',
         authTokenField: pi.authTokenField ?? '',
       }))
     : [{
@@ -3057,7 +3114,7 @@ const removeConfigFile = (index: number) => {
 // 添加代理注入配置
 const addProxyInjection = () => {
   cliToolModalState.form.proxyInjection.push({
-    targetFileId: '',
+    targetFileId: getAutoSelectedProxyTargetFileId(),
     baseUrlField: '',
     authTokenField: '',
   })
@@ -3091,16 +3148,41 @@ const submitCliToolModal = async () => {
     validConfigFiles[0].isPrimary = true
   }
 
-  // 过滤掉空的代理注入配置
-  const validProxyInjections = cliToolModalState.form.proxyInjection.filter(
-    pi => pi.targetFileId && pi.baseUrlField.trim()
-  )
+  // 代理注入配置：允许全空（表示不使用），但不允许"半填"
+  // 单一配置文件时，自动选中作为代理注入目标（避免用户忘记选择）
+  const autoTargetFileId = validConfigFiles.length === 1 ? validConfigFiles[0].id : ''
 
-  // 验证代理注入目标指向有效的配置文件 ID
+  const proxyInjectionsToSave = cliToolModalState.form.proxyInjection
+    .map(pi => {
+      const baseUrlField = pi.baseUrlField.trim()
+      const authTokenField = pi.authTokenField.trim()
+      // 如果用户填写了字段但忘记选择目标文件，且只有一个配置文件，自动补充
+      const targetFileId = pi.targetFileId.trim() || ((baseUrlField || authTokenField) ? autoTargetFileId : '')
+      return { targetFileId, baseUrlField, authTokenField }
+    })
+    .filter(pi => pi.targetFileId || pi.baseUrlField || pi.authTokenField)
+
+  const hasIncompleteProxyInjection = proxyInjectionsToSave.some(
+    pi => !pi.targetFileId || !pi.baseUrlField
+  )
+  if (hasIncompleteProxyInjection) {
+    showToast(t('components.main.customCli.proxyInjectionIncomplete'), 'error')
+    return
+  }
+
+  // 先校验"目标 ID 是否存在"，再校验"目标文件路径是否有效"，避免报错信息误导
+  const allFileIds = new Set(cliToolModalState.form.configFiles.map(cf => cf.id))
   const validFileIds = new Set(validConfigFiles.map(cf => cf.id))
-  const invalidInjections = validProxyInjections.filter(pi => !validFileIds.has(pi.targetFileId))
-  if (invalidInjections.length > 0) {
+
+  const hasInvalidProxyTarget = proxyInjectionsToSave.some(pi => !allFileIds.has(pi.targetFileId))
+  if (hasInvalidProxyTarget) {
     showToast(t('components.main.customCli.invalidProxyTarget'), 'error')
+    return
+  }
+
+  const hasProxyTargetPathMissing = proxyInjectionsToSave.some(pi => !validFileIds.has(pi.targetFileId))
+  if (hasProxyTargetPathMissing) {
+    showToast(t('components.main.customCli.proxyTargetPathRequired'), 'error')
     return
   }
 
@@ -3111,7 +3193,7 @@ const submitCliToolModal = async () => {
         id: cliToolModalState.editingId,
         name,
         configFiles: validConfigFiles,
-        proxyInjection: validProxyInjections,
+        proxyInjection: proxyInjectionsToSave,
       })
       showToast(t('components.main.customCli.updateSuccess'), 'success')
     } else {
@@ -3119,7 +3201,7 @@ const submitCliToolModal = async () => {
       const newTool = await createCustomCliTool({
         name,
         configFiles: validConfigFiles,
-        proxyInjection: validProxyInjections,
+        proxyInjection: proxyInjectionsToSave,
       })
       selectedToolId.value = newTool.id
       showToast(t('components.main.customCli.createSuccess'), 'success')
@@ -3130,6 +3212,16 @@ const submitCliToolModal = async () => {
     closeCliToolModal()
   } catch (error) {
     console.error('Failed to save CLI tool', error)
+    // 处理各种错误类型：Error 对象、字符串、其他
+    const msg = error instanceof Error ? error.message : String(error ?? '')
+    if (msg.includes('ERR_CUSTOM_CLI_PROXY_INJECTION_INCOMPLETE')) {
+      showToast(t('components.main.customCli.proxyInjectionIncomplete'), 'error')
+      return
+    }
+    if (msg.includes('ERR_CUSTOM_CLI_INVALID_PROXY_TARGET')) {
+      showToast(t('components.main.customCli.invalidProxyTarget'), 'error')
+      return
+    }
     showToast(t('components.main.customCli.saveFailed'), 'error')
   }
 }
@@ -3432,6 +3524,7 @@ const confirmDeleteCliTool = async () => {
 }
 
 .level-option.selected {
+  background: rgba(10, 132, 255, 0.12); /* fallback for old WebKit */
   background: color-mix(in srgb, var(--mac-accent) 12%, transparent);
   font-weight: 500;
 }

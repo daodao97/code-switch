@@ -22,6 +22,14 @@ import (
 const (
 	skillStoreDir  = ".code-switch"
 	skillStoreFile = "skill.json"
+
+	// 平台常量
+	skillPlatformClaude = "claude"
+	skillPlatformCodex  = "codex"
+
+	// 安装位置常量
+	skillLocationUser    = "user"
+	skillLocationProject = "project"
 )
 
 var (
@@ -39,14 +47,30 @@ type Skill struct {
 	Directory   string `json:"directory"`
 	ReadmeURL   string `json:"readme_url"`
 	Installed   bool   `json:"installed"`
-	RepoOwner   string `json:"repo_owner,omitempty"`
-	RepoName    string `json:"repo_name,omitempty"`
-	RepoBranch  string `json:"repo_branch,omitempty"`
+
+	// 新增字段
+	Enabled         bool   `json:"enabled"`                     // 是否启用（从 SKILL.md 读取）
+	LicenseFile     string `json:"license_file,omitempty"`      // 许可证文件路径
+	Platform        string `json:"platform,omitempty"`          // "claude" | "codex"
+	InstallLocation string `json:"install_location,omitempty"`  // "user" | "project"
+
+	// 仓库字段
+	RepoOwner  string `json:"repo_owner,omitempty"`
+	RepoName   string `json:"repo_name,omitempty"`
+	RepoBranch string `json:"repo_branch,omitempty"`
 }
 
 type skillMetadata struct {
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
+}
+
+// skillMetadataExtended 扩展的元数据结构（包含 enabled 状态相关字段）
+type skillMetadataExtended struct {
+	Name                   string `yaml:"name"`
+	Description            string `yaml:"description"`
+	DisableModelInvocation bool   `yaml:"disable-model-invocation"`
+	UserInvocable          *bool  `yaml:"user-invocable"`
 }
 
 type skillStore struct {
@@ -71,6 +95,8 @@ type installRequest struct {
 	RepoOwner string `json:"repo_owner"`
 	RepoName  string `json:"repo_name"`
 	Branch    string `json:"repo_branch"`
+	Platform  string `json:"platform"`  // "claude" | "codex"
+	Location  string `json:"location"`  // "user" | "project"
 }
 
 type SkillService struct {
@@ -90,6 +116,170 @@ func NewSkillService() *SkillService {
 		storePath:  filepath.Join(home, skillStoreDir, skillStoreFile),
 		installDir: filepath.Join(home, ".claude", "skills"),
 	}
+}
+
+// getInstallPath 根据平台和位置返回 skills 目录路径
+// platform: "claude" | "codex"
+// location: "user" | "project"
+func (ss *SkillService) getInstallPath(platform, location string) (string, error) {
+	var basePath string
+
+	switch location {
+	case skillLocationProject:
+		// 项目级: 使用当前工作目录
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("获取工作目录失败: %w", err)
+		}
+		basePath = cwd
+	case skillLocationUser:
+		fallthrough
+	default:
+		// 用户级: 使用 home 目录
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("获取用户目录失败: %w", err)
+		}
+		basePath = home
+	}
+
+	var configDir string
+	switch platform {
+	case skillPlatformCodex:
+		configDir = ".codex"
+	case skillPlatformClaude:
+		fallthrough
+	default:
+		configDir = ".claude"
+	}
+
+	return filepath.Join(basePath, configDir, "skills"), nil
+}
+
+// ListSkillsForPlatform 列出指定平台的技能（用户级 + 项目级）
+func (ss *SkillService) ListSkillsForPlatform(platform string) ([]Skill, error) {
+	if platform == "" {
+		platform = skillPlatformClaude
+	}
+
+	var allSkills []Skill
+
+	// 扫描用户级目录
+	userPath, err := ss.getInstallPath(platform, skillLocationUser)
+	if err == nil {
+		userSkills := ss.scanSkillsDirectory(userPath, platform, skillLocationUser)
+		allSkills = append(allSkills, userSkills...)
+	}
+
+	// 扫描项目级目录
+	projectPath, err := ss.getInstallPath(platform, skillLocationProject)
+	if err == nil {
+		projectSkills := ss.scanSkillsDirectory(projectPath, platform, skillLocationProject)
+		allSkills = append(allSkills, projectSkills...)
+	}
+
+	// 按名称排序
+	sort.SliceStable(allSkills, func(i, j int) bool {
+		return strings.ToLower(allSkills[i].Name) < strings.ToLower(allSkills[j].Name)
+	})
+
+	return allSkills, nil
+}
+
+// scanSkillsDirectory 扫描目录中的技能
+func (ss *SkillService) scanSkillsDirectory(dir, platform, location string) []Skill {
+	var skills []Skill
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return skills
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		skillPath := filepath.Join(dir, entry.Name())
+		skillMDPath := filepath.Join(skillPath, "SKILL.md")
+
+		// 检查 SKILL.md 是否存在
+		if _, err := os.Stat(skillMDPath); err != nil {
+			continue
+		}
+
+		// 读取元数据
+		meta, enabled, err := ss.readSkillMetadataExtended(skillPath)
+		if err != nil {
+			continue
+		}
+
+		name := strings.TrimSpace(meta.Name)
+		if name == "" {
+			name = entry.Name()
+		}
+
+		// 检查 LICENSE 文件
+		licenseFile := ""
+		for _, lf := range []string{"LICENSE", "LICENSE.txt", "LICENSE.md"} {
+			if _, err := os.Stat(filepath.Join(skillPath, lf)); err == nil {
+				licenseFile = lf
+				break
+			}
+		}
+
+		skill := Skill{
+			Key:             fmt.Sprintf("%s:%s:%s", platform, location, entry.Name()),
+			Name:            name,
+			Description:     strings.TrimSpace(meta.Description),
+			Directory:       entry.Name(),
+			Installed:       true,
+			Enabled:         enabled,
+			LicenseFile:     licenseFile,
+			Platform:        platform,
+			InstallLocation: location,
+		}
+
+		skills = append(skills, skill)
+	}
+
+	return skills
+}
+
+// readSkillMetadataExtended 读取技能元数据（包括 enabled 状态）
+func (ss *SkillService) readSkillMetadataExtended(dir string) (skillMetadataExtended, bool, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "SKILL.md"))
+	if err != nil {
+		return skillMetadataExtended{}, false, err
+	}
+
+	meta, err := parseSkillMetadataExtended(string(data))
+	if err != nil {
+		return skillMetadataExtended{}, false, err
+	}
+
+	// enabled = NOT disable-model-invocation
+	enabled := !meta.DisableModelInvocation
+
+	return meta, enabled, nil
+}
+
+// parseSkillMetadataExtended 解析扩展元数据
+func parseSkillMetadataExtended(content string) (skillMetadataExtended, error) {
+	var meta skillMetadataExtended
+	content = strings.TrimLeft(content, "\ufeff")
+
+	// 使用 splitFrontMatter 替代 strings.SplitN，避免 YAML 值中的 --- 被误判
+	_, fmLines, _, err := splitFrontMatter(content)
+	if err != nil {
+		return meta, errors.New("SKILL.md 缺少 front matter")
+	}
+
+	frontMatter := strings.Join(fmLines, "\n")
+	if err := yaml.Unmarshal([]byte(frontMatter), &meta); err != nil {
+		return meta, err
+	}
+	return meta, nil
 }
 
 // ListSkills aggregates skills from configured repositories and the local install directory.
@@ -165,11 +355,21 @@ func (ss *SkillService) ListSkills() ([]Skill, error) {
 }
 
 // InstallSkill installs a skill directory from the configured repositories.
+// 支持 platform 和 location 参数，用于指定安装的平台和位置
 func (ss *SkillService) InstallSkill(req installRequest) error {
 	req.Directory = strings.TrimSpace(req.Directory)
 	if req.Directory == "" {
 		return errors.New("skill directory 不能为空")
 	}
+
+	// 设置默认值
+	if req.Platform == "" {
+		req.Platform = skillPlatformClaude
+	}
+	if req.Location == "" {
+		req.Location = skillLocationUser
+	}
+
 	store, err := ss.loadStore()
 	if err != nil {
 		return err
@@ -193,7 +393,7 @@ func (ss *SkillService) InstallSkill(req installRequest) error {
 			lastErr = fmt.Errorf("仓库 %s/%s 中未找到 %s", repo.Owner, repo.Name, req.Directory)
 			continue
 		}
-		if err := ss.installFromPath(req.Directory, skillPath); err != nil {
+		if err := ss.installFromPathEx(req.Directory, skillPath, req.Platform, req.Location); err != nil {
 			cleanup()
 			lastErr = err
 			continue
@@ -208,13 +408,25 @@ func (ss *SkillService) InstallSkill(req installRequest) error {
 }
 
 func (ss *SkillService) installFromPath(directory, source string) error {
+	return ss.installFromPathEx(directory, source, skillPlatformClaude, skillLocationUser)
+}
+
+// installFromPathEx 安装技能到指定平台和位置
+func (ss *SkillService) installFromPathEx(directory, source, platform, location string) error {
 	if _, err := os.Stat(filepath.Join(source, "SKILL.md")); err != nil {
 		return fmt.Errorf("%s 缺少 SKILL.md", directory)
 	}
-	if err := os.MkdirAll(ss.installDir, 0o755); err != nil {
+
+	// 获取安装路径
+	installPath, err := ss.getInstallPath(platform, location)
+	if err != nil {
 		return err
 	}
-	target := filepath.Join(ss.installDir, directory)
+
+	if err := os.MkdirAll(installPath, 0o755); err != nil {
+		return err
+	}
+	target := filepath.Join(installPath, directory)
 	if err := os.RemoveAll(target); err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -254,6 +466,291 @@ func (ss *SkillService) UninstallSkill(directory string) error {
 	}
 	delete(store.Skills, directory)
 	return ss.saveStoreLocked(store)
+}
+
+// UninstallSkillEx 卸载技能（支持多平台多位置）
+func (ss *SkillService) UninstallSkillEx(directory, platform, location string) error {
+	directory = strings.TrimSpace(directory)
+	if directory == "" {
+		return errors.New("skill directory 不能为空")
+	}
+
+	// 默认值
+	if platform == "" {
+		platform = skillPlatformClaude
+	}
+	if location == "" {
+		location = skillLocationUser
+	}
+
+	installPath, err := ss.getInstallPath(platform, location)
+	if err != nil {
+		return err
+	}
+
+	target := filepath.Join(installPath, directory)
+	if err := os.RemoveAll(target); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	// 更新 store
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	store, err := ss.loadStoreLocked()
+	if err != nil {
+		return err
+	}
+	if store.Skills == nil {
+		store.Skills = make(map[string]skillState)
+	}
+	delete(store.Skills, directory)
+	return ss.saveStoreLocked(store)
+}
+
+// ToggleSkill 切换技能的启用状态
+// 通过修改 SKILL.md 的 disable-model-invocation 字段实现
+func (ss *SkillService) ToggleSkill(directory, platform, location string, enabled bool) error {
+	if directory == "" {
+		return errors.New("skill directory 不能为空")
+	}
+
+	installPath, err := ss.getInstallPath(platform, location)
+	if err != nil {
+		return err
+	}
+
+	skillMDPath := filepath.Join(installPath, directory, "SKILL.md")
+
+	// 读取文件
+	data, err := os.ReadFile(skillMDPath)
+	if err != nil {
+		return fmt.Errorf("读取 SKILL.md 失败: %w", err)
+	}
+
+	// 使用最小文本补丁修改
+	newContent, changed, err := patchSkillFrontMatterBool(
+		string(data),
+		"disable-model-invocation",
+		!enabled, // enabled=true → disable-model-invocation=false
+	)
+	if err != nil {
+		return fmt.Errorf("修改 SKILL.md 失败: %w", err)
+	}
+
+	if !changed {
+		return nil // 无需修改
+	}
+
+	// 原子写入
+	return AtomicWriteBytes(skillMDPath, []byte(newContent))
+}
+
+// splitFrontMatter 使用行首匹配 ^---\s*$ 来分割 front matter
+// 返回 (prefix, frontMatterLines, body, error)
+// prefix: 开始 --- 之前的行
+// frontMatterLines: front matter 内容（不含边界行）
+// body: 结束 --- 之后的所有内容
+func splitFrontMatter(content string) (prefix string, fmLines []string, body string, err error) {
+	// 统一行尾为 \n 进行处理
+	normalized := strings.ReplaceAll(content, "\r\n", "\n")
+	lines := strings.Split(normalized, "\n")
+
+	startIdx := -1
+	endIdx := -1
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "---" {
+			if startIdx == -1 {
+				startIdx = i
+			} else {
+				endIdx = i
+				break
+			}
+		}
+	}
+
+	if startIdx == -1 || endIdx == -1 {
+		return "", nil, "", errors.New("无法解析 front matter：未找到有效的 --- 边界")
+	}
+
+	// prefix: lines[0:startIdx]
+	if startIdx > 0 {
+		prefix = strings.Join(lines[:startIdx], "\n") + "\n"
+	}
+
+	// fmLines: lines[startIdx+1:endIdx]
+	fmLines = lines[startIdx+1 : endIdx]
+
+	// body: lines[endIdx+1:]
+	if endIdx+1 < len(lines) {
+		body = strings.Join(lines[endIdx+1:], "\n")
+	}
+
+	return prefix, fmLines, body, nil
+}
+
+// patchSkillFrontMatterBool 最小化修改 SKILL.md 的 front matter 中的布尔字段
+// 保留原有格式、注释和字段顺序
+func patchSkillFrontMatterBool(markdown, key string, desired bool) (string, bool, error) {
+	// 1. 保留 BOM
+	hasBOM := false
+	if strings.HasPrefix(markdown, "\ufeff") {
+		hasBOM = true
+		markdown = strings.TrimPrefix(markdown, "\ufeff")
+	}
+
+	// 2. 检测行尾风格
+	hasCRLF := strings.Contains(markdown, "\r\n")
+
+	// 3. 分割 front matter（使用行首匹配，避免内容中的 --- 被误判）
+	prefix, lines, body, err := splitFrontMatter(markdown)
+	if err != nil {
+		return "", false, err
+	}
+
+	// 4. 按行处理 front matter
+	keyFound := false
+	modified := false
+	desiredStr := "false"
+	if desired {
+		desiredStr = "true"
+	}
+
+	for i, line := range lines {
+		// 移除可能的 \r
+		cleanLine := strings.TrimSuffix(line, "\r")
+		trimmed := strings.TrimSpace(cleanLine)
+
+		// 检查是否匹配目标 key
+		if strings.HasPrefix(trimmed, key+":") {
+			keyFound = true
+
+			// 提取当前值
+			colonIdx := strings.Index(trimmed, ":")
+			valuePart := strings.TrimSpace(trimmed[colonIdx+1:])
+
+			// 处理可能的行内注释
+			comment := ""
+			hashIdx := strings.Index(valuePart, "#")
+			if hashIdx != -1 {
+				comment = valuePart[hashIdx:]
+				valuePart = strings.TrimSpace(valuePart[:hashIdx])
+			}
+
+			// 检查是否需要修改
+			currentBool := strings.ToLower(valuePart) == "true"
+			if currentBool == desired {
+				continue // 值已经正确，无需修改
+			}
+
+			// 构建新行（保留原有缩进）
+			indent := ""
+			for _, ch := range cleanLine {
+				if ch == ' ' || ch == '\t' {
+					indent += string(ch)
+				} else {
+					break
+				}
+			}
+
+			newLine := indent + key + ": " + desiredStr
+			if comment != "" {
+				newLine += " " + comment
+			}
+
+			lines[i] = newLine
+			modified = true
+		}
+	}
+
+	// 5. 如果 key 不存在，在 front matter 末尾插入
+	if !keyFound {
+		insertLine := key + ": " + desiredStr
+		// 在最后一行（通常是空行）之前插入
+		insertIdx := len(lines) - 1
+		for insertIdx > 0 && strings.TrimSpace(lines[insertIdx]) == "" {
+			insertIdx--
+		}
+		insertIdx++
+
+		newLines := make([]string, 0, len(lines)+1)
+		newLines = append(newLines, lines[:insertIdx]...)
+		newLines = append(newLines, insertLine)
+		newLines = append(newLines, lines[insertIdx:]...)
+		lines = newLines
+		modified = true
+	}
+
+	// 6. 重建文档
+	newFrontMatter := strings.Join(lines, "\n")
+	result := prefix + "---\n" + newFrontMatter + "\n---\n" + body
+
+	// 7. 恢复 CRLF（如果原文使用）
+	if hasCRLF {
+		// 先统一为 LF，再替换为 CRLF
+		result = strings.ReplaceAll(result, "\r\n", "\n")
+		result = strings.ReplaceAll(result, "\n", "\r\n")
+	}
+
+	// 8. 恢复 BOM
+	if hasBOM {
+		result = "\ufeff" + result
+	}
+
+	return result, modified, nil
+}
+
+// GetSkillContent 获取技能的 SKILL.md 内容
+func (ss *SkillService) GetSkillContent(directory, platform, location string) (string, error) {
+	if directory == "" {
+		return "", errors.New("skill directory 不能为空")
+	}
+
+	installPath, err := ss.getInstallPath(platform, location)
+	if err != nil {
+		return "", err
+	}
+
+	skillMDPath := filepath.Join(installPath, directory, "SKILL.md")
+	data, err := os.ReadFile(skillMDPath)
+	if err != nil {
+		return "", fmt.Errorf("读取 SKILL.md 失败: %w", err)
+	}
+
+	return string(data), nil
+}
+
+// SaveSkillContent 保存技能的 SKILL.md 内容
+func (ss *SkillService) SaveSkillContent(directory, platform, location, content string) error {
+	if directory == "" {
+		return errors.New("skill directory 不能为空")
+	}
+
+	installPath, err := ss.getInstallPath(platform, location)
+	if err != nil {
+		return err
+	}
+
+	skillMDPath := filepath.Join(installPath, directory, "SKILL.md")
+
+	// 原子写入
+	return AtomicWriteBytes(skillMDPath, []byte(content))
+}
+
+// OpenSkillFolder 打开技能目录
+func (ss *SkillService) OpenSkillFolder(platform, location string) error {
+	installPath, err := ss.getInstallPath(platform, location)
+	if err != nil {
+		return err
+	}
+
+	// 确保目录存在
+	if err := os.MkdirAll(installPath, 0o755); err != nil {
+		return err
+	}
+
+	return OpenInExplorer(installPath)
 }
 
 // Repository management ----------------------------------------------------
@@ -634,11 +1131,14 @@ func readSkillMetadata(dir string) (skillMetadata, error) {
 func parseSkillMetadata(content string) (skillMetadata, error) {
 	var meta skillMetadata
 	content = strings.TrimLeft(content, "\ufeff")
-	parts := strings.SplitN(content, "---", 3)
-	if len(parts) < 3 {
+
+	// 使用 splitFrontMatter 替代 strings.SplitN，避免 YAML 值中的 --- 被误判
+	_, fmLines, _, err := splitFrontMatter(content)
+	if err != nil {
 		return meta, errors.New("SKILL.md 缺少 front matter")
 	}
-	frontMatter := strings.TrimSpace(parts[1])
+
+	frontMatter := strings.Join(fmLines, "\n")
 	if err := yaml.Unmarshal([]byte(frontMatter), &meta); err != nil {
 		return meta, err
 	}

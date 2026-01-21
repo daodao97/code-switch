@@ -66,26 +66,106 @@ func (css *CodexSettingsService) EnableProxy() error {
 	if err != nil {
 		return err
 	}
+	authPath, authBackupPath, err := css.authPaths()
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
 		return err
 	}
+
+	// 幂等化检查：状态文件存在则视为已启用，不覆盖基线
+	stateExists, err := ProxyStateExists("codex")
+	if err != nil {
+		return err
+	}
+
+	// 读取现有配置（最小侵入模式：保留用户的其他配置）
 	var raw map[string]any
-	if _, err := os.Stat(settingsPath); err == nil {
+	fileExisted := false
+	if _, statErr := os.Stat(settingsPath); statErr == nil {
+		fileExisted = true
 		content, readErr := os.ReadFile(settingsPath)
 		if readErr != nil {
 			return readErr
 		}
-		if err := os.WriteFile(backupPath, content, 0o600); err != nil {
-			return err
+		// 仅首次启用时创建备份，避免重复 Enable 覆盖基线
+		if !stateExists {
+			if err := os.WriteFile(backupPath, content, 0o600); err != nil {
+				return err
+			}
 		}
 		if err := toml.Unmarshal(content, &raw); err != nil {
-			return err
+			// TOML 解析失败，使用空配置继续（备份已保存）
+			fmt.Printf("[警告] config.toml 格式无效，已备份到 %s，将使用空配置: %v\n", backupPath, err)
+			raw = make(map[string]any)
 		}
 	} else {
 		raw = make(map[string]any)
 	}
 	if raw == nil {
 		raw = make(map[string]any)
+	}
+
+	// 首次启用：记录启用前的关键字段基线到状态文件
+	if !stateExists {
+		// 检查 auth.json 是否存在
+		authFileExisted := false
+		var originalAuthKey *string
+		if _, authStatErr := os.Stat(authPath); authStatErr == nil {
+			authFileExisted = true
+			// 备份 auth.json
+			if authContent, authReadErr := os.ReadFile(authPath); authReadErr == nil {
+				if err := os.WriteFile(authBackupPath, authContent, 0o600); err != nil {
+					fmt.Printf("[警告] auth.json 备份失败: %v\n", err)
+				}
+				// 读取原始 API Key
+				var authPayload map[string]string
+				if json.Unmarshal(authContent, &authPayload) == nil {
+					if v, ok := authPayload[codexEnvKey]; ok {
+						originalAuthKey = &v
+					}
+				}
+			}
+		}
+
+		// 检查 model_providers.code-switch-r 是否已存在
+		modelProvidersKeyExisted := false
+		if mpRaw, ok := raw["model_providers"]; ok {
+			if mp, ok := mpRaw.(map[string]any); ok {
+				_, modelProvidersKeyExisted = mp[codexProviderKey]
+			}
+		}
+
+		state := &ProxyState{
+			TargetPath:               settingsPath,
+			FileExisted:              fileExisted,
+			InjectedBaseURL:          css.baseURL(),
+			InjectedAuthToken:        codexTokenValue,
+			AuthFilePath:             authPath,
+			AuthFileExisted:          authFileExisted,
+			InjectedProviderKey:      codexProviderKey,
+			ModelProvidersKeyExisted: modelProvidersKeyExisted,
+		}
+
+		// 记录原始 model_provider
+		if v, ok := raw["model_provider"]; ok {
+			if s, ok := v.(string); ok {
+				state.OriginalModelProvider = &s
+			}
+		}
+		// 记录原始 preferred_auth_method
+		if v, ok := raw["preferred_auth_method"]; ok {
+			if s, ok := v.(string); ok {
+				state.OriginalPreferredAuth = &s
+			}
+		}
+		// 记录原始 auth key
+		state.OriginalAuthToken = originalAuthKey
+
+		if err := SaveProxyState("codex", state); err != nil {
+			return err
+		}
 	}
 
 	// 最小侵入模式：只设置必需的代理相关字段
@@ -119,19 +199,237 @@ func (css *CodexSettingsService) EnableProxy() error {
 }
 
 func (css *CodexSettingsService) DisableProxy() error {
-	settingsPath, backupPath, err := css.paths()
+	settingsPath, _, err := css.paths()
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(settingsPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+
+	// 读取当前 config.toml（保留用户在代理期间的所有编辑）
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// 配置文件不存在，清理状态文件和 auth.json 后返回
+			_ = css.surgicalRestoreAuthFile(nil)
+			return DeleteProxyState("codex")
+		}
 		return err
 	}
-	if _, err := os.Stat(backupPath); err == nil {
-		if err := os.Rename(backupPath, settingsPath); err != nil {
-			return err
+
+	var raw map[string]any
+	if len(content) > 0 {
+		if err := toml.Unmarshal(content, &raw); err != nil {
+			return fmt.Errorf("config.toml 解析失败，请检查文件格式: %w", err)
 		}
 	}
-	return css.restoreAuthFile()
+	if raw == nil {
+		raw = make(map[string]any)
+	}
+
+	// 尝试加载状态文件
+	state, stateErr := LoadProxyState("codex")
+	if stateErr != nil {
+		// 兜底：状态文件缺失/损坏时，仅在字段仍等于代理值时才删除
+		// 避免误删用户自定义的直连配置
+		changed := css.fallbackCleanupConfig(raw)
+		if changed {
+			if err := css.writeConfigToml(settingsPath, raw); err != nil {
+				return err
+			}
+		}
+		// 兜底清理 auth.json（仅删除代理 token）
+		_ = css.surgicalRestoreAuthFile(nil)
+		return DeleteProxyState("codex")
+	}
+
+	// 有状态文件：按基线做"手术式"恢复
+
+	// 1. 恢复或删除 model_provider
+	if state.OriginalModelProvider != nil {
+		raw["model_provider"] = *state.OriginalModelProvider
+	} else {
+		delete(raw, "model_provider")
+	}
+
+	// 2. 恢复或删除 preferred_auth_method
+	if state.OriginalPreferredAuth != nil {
+		raw["preferred_auth_method"] = *state.OriginalPreferredAuth
+	} else {
+		delete(raw, "preferred_auth_method")
+	}
+
+	// 3. 删除注入的 model_providers.{key} 段（如果启用前不存在）
+	if !state.ModelProvidersKeyExisted && state.InjectedProviderKey != "" {
+		if mpRaw, ok := raw["model_providers"]; ok {
+			if mp, ok := mpRaw.(map[string]any); ok {
+				delete(mp, state.InjectedProviderKey)
+				// 如果 model_providers 变空，删除整个段
+				if len(mp) == 0 {
+					delete(raw, "model_providers")
+				}
+			} else if mpTyped, ok := mpRaw.(map[string]map[string]any); ok {
+				delete(mpTyped, state.InjectedProviderKey)
+				if len(mpTyped) == 0 {
+					delete(raw, "model_providers")
+				}
+			}
+		}
+	}
+
+	// 写入配置
+	if err := css.writeConfigToml(settingsPath, raw); err != nil {
+		return err
+	}
+
+	// 手术式恢复 auth.json
+	if err := css.surgicalRestoreAuthFile(state); err != nil {
+		return err
+	}
+
+	return DeleteProxyState("codex")
+}
+
+// fallbackCleanupConfig 兜底清理：仅删除仍等于代理值的字段
+// 注意：只有当 model_provider 仍指向代理时，才删除 preferred_auth_method
+// 避免误删用户正常的 "apikey" 认证配置
+func (css *CodexSettingsService) fallbackCleanupConfig(raw map[string]any) bool {
+	changed := false
+	isProxyActive := false
+
+	// 首先检查 model_provider 是否仍指向代理
+	if v, ok := raw["model_provider"]; ok {
+		if s, ok := v.(string); ok && (s == codexProviderKey || s == "code-switch") {
+			isProxyActive = true
+			delete(raw, "model_provider")
+			changed = true
+		}
+	}
+
+	// 只有当 model_provider 指向代理时，才删除 preferred_auth_method
+	// 这样可以避免误删用户正常的 "apikey" 认证配置
+	if isProxyActive {
+		if v, ok := raw["preferred_auth_method"]; ok {
+			if s, ok := v.(string); ok && s == codexPreferredAuth {
+				delete(raw, "preferred_auth_method")
+				changed = true
+			}
+		}
+	}
+
+	// 删除代理专用的 model_providers.code-switch-r
+	// 只有当 base_url 仍指向代理时才删除，避免误删用户自定义的同名 provider
+	proxyURL := css.baseURL()
+	if mpRaw, ok := raw["model_providers"]; ok {
+		if mp, ok := mpRaw.(map[string]any); ok {
+			// 检查 code-switch-r
+			if providerRaw, exists := mp[codexProviderKey]; exists {
+				if css.isProviderPointingToProxy(providerRaw, proxyURL) {
+					delete(mp, codexProviderKey)
+					changed = true
+				}
+			}
+			// 兼容旧版 key: code-switch
+			if providerRaw, exists := mp["code-switch"]; exists {
+				if css.isProviderPointingToProxy(providerRaw, proxyURL) {
+					delete(mp, "code-switch")
+					changed = true
+				}
+			}
+			if len(mp) == 0 {
+				delete(raw, "model_providers")
+			}
+		}
+	}
+
+	return changed
+}
+
+// isProviderPointingToProxy 检查 provider 配置的 base_url 是否指向代理
+func (css *CodexSettingsService) isProviderPointingToProxy(providerRaw any, proxyURL string) bool {
+	provider, ok := providerRaw.(map[string]any)
+	if !ok {
+		return false
+	}
+	baseURL, ok := provider["base_url"].(string)
+	if !ok {
+		return false
+	}
+	return strings.EqualFold(
+		strings.TrimSuffix(strings.TrimSpace(baseURL), "/"),
+		strings.TrimSuffix(strings.TrimSpace(proxyURL), "/"),
+	)
+}
+
+// writeConfigToml 将配置写入 config.toml
+func (css *CodexSettingsService) writeConfigToml(path string, raw map[string]any) error {
+	data, err := toml.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("序列化 config.toml 失败: %w", err)
+	}
+	cleaned := stripModelProvidersHeader(data)
+	return AtomicWriteBytes(path, cleaned)
+}
+
+// surgicalRestoreAuthFile 手术式恢复 auth.json
+func (css *CodexSettingsService) surgicalRestoreAuthFile(state *ProxyState) error {
+	authPath, _, err := css.authPaths()
+	if err != nil {
+		return err
+	}
+
+	// 读取当前 auth.json
+	authContent, err := os.ReadFile(authPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// auth.json 不存在，无需处理
+			return nil
+		}
+		return err
+	}
+
+	// 使用 map[string]any 以支持非字符串值（与 writeAuthFile 保持一致）
+	var payload map[string]any
+	if err := json.Unmarshal(authContent, &payload); err != nil {
+		// 格式无效，直接返回
+		return nil
+	}
+	if payload == nil {
+		return nil
+	}
+
+	// 获取当前 API Key（安全类型转换）
+	currentKey := ""
+	if v, ok := payload[codexEnvKey]; ok {
+		if s, ok := v.(string); ok {
+			currentKey = s
+		}
+	}
+
+	if state == nil {
+		// 兜底模式：仅删除代理 token
+		if currentKey == codexTokenValue {
+			delete(payload, codexEnvKey)
+			if len(payload) == 0 {
+				// 文件变空，删除文件
+				return os.Remove(authPath)
+			}
+			return AtomicWriteJSON(authPath, payload)
+		}
+		return nil
+	}
+
+	// 有状态文件：按基线恢复
+	if state.OriginalAuthToken != nil {
+		payload[codexEnvKey] = *state.OriginalAuthToken
+	} else {
+		delete(payload, codexEnvKey)
+	}
+
+	// 如果 auth.json 变空且启用前不存在，则删除文件
+	if len(payload) == 0 && !state.AuthFileExisted {
+		return os.Remove(authPath)
+	}
+
+	return AtomicWriteJSON(authPath, payload)
 }
 
 func (css *CodexSettingsService) readConfig() (*codexConfig, error) {
@@ -247,31 +545,39 @@ func stripModelProvidersHeader(data []byte) []byte {
 	return []byte(strings.Join(result, "\n"))
 }
 
+// writeAuthFile 外科式写入 auth.json：仅更新 OPENAI_API_KEY，保留其他字段
 func (css *CodexSettingsService) writeAuthFile() error {
-	authPath, backupPath, err := css.authPaths()
+	authPath, _, err := css.authPaths()
 	if err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(authPath), 0o755); err != nil {
 		return err
 	}
-	if _, err := os.Stat(authPath); err == nil {
-		content, readErr := os.ReadFile(authPath)
-		if readErr != nil {
-			return readErr
+
+	// 读取现有 auth.json（如果存在），保留其他字段
+	// 使用 map[string]any 以支持非字符串值（如果未来格式变化）
+	payload := make(map[string]any)
+	if data, readErr := os.ReadFile(authPath); readErr == nil && len(data) > 0 {
+		// 解析现有内容
+		if unmarshalErr := json.Unmarshal(data, &payload); unmarshalErr != nil {
+			// JSON 解析失败，可能是格式损坏，使用空 map 继续
+			// 但保留日志以便调试
+			fmt.Printf("[警告] auth.json 解析失败，将使用空配置: %v\n", unmarshalErr)
+			payload = make(map[string]any)
 		}
-		if err := os.WriteFile(backupPath, content, 0o600); err != nil {
-			return err
-		}
+	} else if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		// 非"文件不存在"的读取错误，返回错误避免覆盖
+		return fmt.Errorf("读取 auth.json 失败: %w", readErr)
 	}
-	payload := map[string]string{
-		codexEnvKey: codexTokenValue,
+	if payload == nil {
+		payload = make(map[string]any)
 	}
-	data, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(authPath, data, 0o600)
+
+	// 仅更新代理专用的 API Key
+	payload[codexEnvKey] = codexTokenValue
+
+	return AtomicWriteJSON(authPath, payload)
 }
 
 func (css *CodexSettingsService) restoreAuthFile() error {
@@ -489,10 +795,17 @@ func (css *CodexSettingsService) readAuthKey() string {
 		return ""
 	}
 
-	var payload map[string]string
+	// 使用 map[string]any 以支持非字符串值（与 writeAuthFile/surgicalRestoreAuthFile 保持一致）
+	var payload map[string]any
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return ""
 	}
 
-	return payload[codexEnvKey]
+	// 安全类型转换
+	if v, ok := payload[codexEnvKey]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
 }

@@ -33,16 +33,19 @@ type ProviderRelayService struct {
 	geminiService       *GeminiService
 	blacklistService    *BlacklistService
 	notificationService *NotificationService
+	appSettings         *AppSettingsService // 应用设置服务（用于获取轮询开关状态）
 	server              *http.Server
 	addr                string
 	lastUsed            map[string]*LastUsedProvider // 各平台最后使用的供应商
 	lastUsedMu          sync.RWMutex                 // 保护 lastUsed 的锁
+	rrMu                sync.Mutex                   // 轮询状态锁
+	rrLastStart         map[string]string            // 轮询状态：key="platform:level" → value=上次起始 Provider Name
 }
 
 // errClientAbort 表示客户端中断连接，不应计入 provider 失败次数
 var errClientAbort = errors.New("client aborted, skip failure count")
 
-func NewProviderRelayService(providerService *ProviderService, geminiService *GeminiService, blacklistService *BlacklistService, notificationService *NotificationService, addr string) *ProviderRelayService {
+func NewProviderRelayService(providerService *ProviderService, geminiService *GeminiService, blacklistService *BlacklistService, notificationService *NotificationService, appSettings *AppSettingsService, addr string) *ProviderRelayService {
 	if addr == "" {
 		addr = "127.0.0.1:18100" // 【安全修复】仅监听本地回环地址，防止 API Key 暴露到局域网
 	}
@@ -55,12 +58,14 @@ func NewProviderRelayService(providerService *ProviderService, geminiService *Ge
 		geminiService:       geminiService,
 		blacklistService:    blacklistService,
 		notificationService: notificationService,
+		appSettings:         appSettings,
 		addr:                addr,
 		lastUsed: map[string]*LastUsedProvider{
 			"claude": nil,
 			"codex":  nil,
 			"gemini": nil,
 		},
+		rrLastStart: make(map[string]string),
 	}
 }
 
@@ -93,6 +98,130 @@ func (prs *ProviderRelayService) GetAllLastUsedProviders() map[string]*LastUsedP
 	for k, v := range prs.lastUsed {
 		result[k] = v
 	}
+	return result
+}
+
+// isRoundRobinEnabled 检查轮询功能是否启用
+// 条件：1. 应用设置开关启用 2. 拉黑模式关闭（Fixed Mode 跳过轮询）
+func (prs *ProviderRelayService) isRoundRobinEnabled() bool {
+	// 检查拉黑模式是否启用（Fixed Mode 优先级高于轮询）
+	if prs.blacklistService.ShouldUseFixedMode() {
+		return false
+	}
+
+	// 检查应用设置开关
+	if prs.appSettings == nil {
+		return false
+	}
+	settings, err := prs.appSettings.GetAppSettings()
+	if err != nil {
+		return false
+	}
+	return settings.EnableRoundRobin
+}
+
+// roundRobinOrder 对同 Level 的 providers 进行轮询排序
+// 算法：基于 name 追踪，将上次起始 provider 移到末尾，实现轮询效果
+// 参数：
+//   - platform: 平台标识（claude/codex/gemini/custom:xxx）
+//   - level: 当前 Level
+//   - providers: 同 Level 的 providers 列表（已过滤、按用户排序）
+//
+// 返回：轮询排序后的 providers 列表（新切片，不修改原切片）
+func (prs *ProviderRelayService) roundRobinOrder(platform string, level int, providers []Provider) []Provider {
+	if len(providers) <= 1 {
+		return providers
+	}
+
+	// 构建 key: "platform:level"
+	key := fmt.Sprintf("%s:%d", platform, level)
+
+	prs.rrMu.Lock()
+	defer prs.rrMu.Unlock()
+
+	lastStart := prs.rrLastStart[key]
+
+	// 记录本次起始 provider 名称（更新状态）
+	prs.rrLastStart[key] = providers[0].Name
+
+	// 如果没有历史记录，返回原顺序
+	if lastStart == "" {
+		return providers
+	}
+
+	// 查找上次起始 provider 在当前列表中的位置
+	lastIdx := -1
+	for i, p := range providers {
+		if p.Name == lastStart {
+			lastIdx = i
+			break
+		}
+	}
+
+	// 上次起始 provider 不在当前列表（可能被禁用/黑名单），返回原顺序
+	if lastIdx == -1 {
+		return providers
+	}
+
+	// 构建轮询顺序：从 lastIdx+1 开始，环形遍历
+	result := make([]Provider, len(providers))
+	for i := 0; i < len(providers); i++ {
+		idx := (lastIdx + 1 + i) % len(providers)
+		result[i] = providers[idx]
+	}
+
+	// 更新本次起始 provider 名称
+	prs.rrLastStart[key] = result[0].Name
+
+	return result
+}
+
+// roundRobinOrderGemini 对 Gemini providers 进行轮询排序（复用相同逻辑）
+func (prs *ProviderRelayService) roundRobinOrderGemini(level int, providers []GeminiProvider) []GeminiProvider {
+	if len(providers) <= 1 {
+		return providers
+	}
+
+	// 构建 key: "gemini:level"
+	key := fmt.Sprintf("gemini:%d", level)
+
+	prs.rrMu.Lock()
+	defer prs.rrMu.Unlock()
+
+	lastStart := prs.rrLastStart[key]
+
+	// 记录本次起始 provider 名称
+	prs.rrLastStart[key] = providers[0].Name
+
+	// 如果没有历史记录，返回原顺序
+	if lastStart == "" {
+		return providers
+	}
+
+	// 查找上次起始 provider 在当前列表中的位置
+	lastIdx := -1
+	for i, p := range providers {
+		if p.Name == lastStart {
+			lastIdx = i
+			break
+		}
+	}
+
+	// 上次起始 provider 不在当前列表，返回原顺序
+	if lastIdx == -1 {
+		return providers
+	}
+
+	// 构建轮询顺序
+	result := make([]GeminiProvider, len(providers))
+	for i := 0; i < len(providers); i++ {
+		idx := (lastIdx + 1 + i) % len(providers)
+		result[i] = providers[idx]
+	}
+
+	// 更新本次起始 provider 名称
+	prs.rrLastStart[key] = result[0].Name
+
 	return result
 }
 
@@ -308,87 +437,139 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 		// 获取拉黑功能开关状态
 		blacklistEnabled := prs.blacklistService.ShouldUseFixedMode()
 
-		// 【拉黑模式】：只尝试第一个 provider，失败直接返回错误（不自动降级）
-		// 只有当 provider 被拉黑后，下次请求才会自动使用下一个
+		// 【拉黑模式】：同 Provider 重试直到被拉黑，然后切换到下一个 Provider
+		// 设计目标：Claude Code 单次请求最多重试 3 次，但拉黑阈值可能是 5
+		// 通过内部重试机制，在单次请求中累积足够失败次数触发拉黑
 		if blacklistEnabled {
-			fmt.Printf("[INFO] 🔒 拉黑模式已开启，禁用自动降级\n")
+			fmt.Printf("[INFO] 🔒 拉黑模式已开启（同 Provider 重试到拉黑再切换）\n")
 
-			// 找到第一个 provider（按 Level 升序）
-			var firstProvider *Provider
-			var firstLevel int
+			// 获取重试配置
+			retryConfig := prs.blacklistService.GetRetryConfig()
+			maxRetryPerProvider := retryConfig.FailureThreshold
+			retryWaitSeconds := retryConfig.RetryWaitSeconds
+			fmt.Printf("[INFO] 重试配置: 每 Provider 最多 %d 次重试，间隔 %d 秒\n",
+				maxRetryPerProvider, retryWaitSeconds)
+
+			var lastError error
+			var lastProvider string
+			totalAttempts := 0
+
+			// 遍历所有 Level 和 Provider
 			for _, level := range levels {
-				if len(levelGroups[level]) > 0 {
-					p := levelGroups[level][0]
-					firstProvider = &p
-					firstLevel = level
-					break
+				providersInLevel := levelGroups[level]
+				fmt.Printf("[INFO] === 尝试 Level %d（%d 个 provider）===\n", level, len(providersInLevel))
+
+				for _, provider := range providersInLevel {
+					// 检查是否已被拉黑（跳过已拉黑的 provider）
+					if blacklisted, until := prs.blacklistService.IsBlacklisted(kind, provider.Name); blacklisted {
+						fmt.Printf("[INFO] ⏭️ 跳过已拉黑的 Provider: %s (解禁时间: %v)\n", provider.Name, until)
+						continue
+					}
+
+					// 获取实际模型名
+					effectiveModel := provider.GetEffectiveModel(requestedModel)
+					currentBodyBytes := bodyBytes
+					if effectiveModel != requestedModel && requestedModel != "" {
+						fmt.Printf("[INFO] Provider %s 映射模型: %s -> %s\n", provider.Name, requestedModel, effectiveModel)
+						modifiedBody, err := ReplaceModelInRequestBody(bodyBytes, effectiveModel)
+						if err != nil {
+							fmt.Printf("[ERROR] 模型映射失败: %v，跳过此 Provider\n", err)
+							continue
+						}
+						currentBodyBytes = modifiedBody
+					}
+
+					// 获取有效端点
+					effectiveEndpoint := provider.GetEffectiveEndpoint(endpoint)
+
+					// 同 Provider 内重试循环
+					for retryCount := 0; retryCount < maxRetryPerProvider; retryCount++ {
+						totalAttempts++
+
+						// 再次检查是否已被拉黑（重试过程中可能被拉黑）
+						if blacklisted, _ := prs.blacklistService.IsBlacklisted(kind, provider.Name); blacklisted {
+							fmt.Printf("[INFO] 🚫 Provider %s 已被拉黑，切换到下一个\n", provider.Name)
+							break
+						}
+
+						fmt.Printf("[INFO] [拉黑模式] Provider: %s (Level %d) | 重试 %d/%d | Model: %s\n",
+							provider.Name, level, retryCount+1, maxRetryPerProvider, effectiveModel)
+
+						startTime := time.Now()
+						ok, err := prs.forwardRequest(c, kind, provider, effectiveEndpoint, query, clientHeaders, currentBodyBytes, isStream, effectiveModel)
+						duration := time.Since(startTime)
+
+						if ok {
+							fmt.Printf("[INFO] ✓ 成功: %s | 重试 %d 次 | 耗时: %.2fs\n",
+								provider.Name, retryCount+1, duration.Seconds())
+							if err := prs.blacklistService.RecordSuccess(kind, provider.Name); err != nil {
+								fmt.Printf("[WARN] 清零失败计数失败: %v\n", err)
+							}
+							prs.setLastUsedProvider(kind, provider.Name)
+							return
+						}
+
+						// 失败处理
+						lastError = err
+						lastProvider = provider.Name
+
+						errorMsg := "未知错误"
+						if err != nil {
+							errorMsg = err.Error()
+						}
+						fmt.Printf("[WARN] ✗ 失败: %s | 重试 %d/%d | 错误: %s | 耗时: %.2fs\n",
+							provider.Name, retryCount+1, maxRetryPerProvider, errorMsg, duration.Seconds())
+
+						// 客户端中断不计入失败次数，直接返回
+						if errors.Is(err, errClientAbort) {
+							fmt.Printf("[INFO] 客户端中断，停止重试\n")
+							return
+						}
+
+						// 记录失败次数（可能触发拉黑）
+						if err := prs.blacklistService.RecordFailure(kind, provider.Name); err != nil {
+							fmt.Printf("[ERROR] 记录失败到黑名单失败: %v\n", err)
+						}
+
+						// 检查是否刚被拉黑
+						if blacklisted, _ := prs.blacklistService.IsBlacklisted(kind, provider.Name); blacklisted {
+							fmt.Printf("[INFO] 🚫 Provider %s 达到失败阈值，已被拉黑，切换到下一个\n", provider.Name)
+							break
+						}
+
+						// 等待后重试（除非是最后一次）
+						if retryCount < maxRetryPerProvider-1 {
+							fmt.Printf("[INFO] ⏳ 等待 %d 秒后重试...\n", retryWaitSeconds)
+							time.Sleep(time.Duration(retryWaitSeconds) * time.Second)
+						}
+					}
 				}
 			}
 
-			if firstProvider == nil {
-				c.JSON(http.StatusNotFound, gin.H{"error": "no providers available"})
-				return
-			}
+			// 所有 Provider 都失败或被拉黑
+			fmt.Printf("[ERROR] 💥 拉黑模式：所有 Provider 都失败或被拉黑（共尝试 %d 次）\n", totalAttempts)
 
-			// 获取实际模型名
-			effectiveModel := firstProvider.GetEffectiveModel(requestedModel)
-			currentBodyBytes := bodyBytes
-			if effectiveModel != requestedModel && requestedModel != "" {
-				fmt.Printf("[INFO] Provider %s 映射模型: %s -> %s\n", firstProvider.Name, requestedModel, effectiveModel)
-				modifiedBody, err := ReplaceModelInRequestBody(bodyBytes, effectiveModel)
-				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("模型映射失败: %v", err)})
-					return
-				}
-				currentBodyBytes = modifiedBody
-			}
-
-			fmt.Printf("[INFO] [拉黑模式] 使用 Provider: %s (Level %d) | Model: %s\n", firstProvider.Name, firstLevel, effectiveModel)
-
-			// 获取有效的端点（用户配置优先）
-			effectiveEndpoint := firstProvider.GetEffectiveEndpoint(endpoint)
-			startTime := time.Now()
-			ok, err := prs.forwardRequest(c, kind, *firstProvider, effectiveEndpoint, query, clientHeaders, currentBodyBytes, isStream, effectiveModel)
-			duration := time.Since(startTime)
-
-			if ok {
-				fmt.Printf("[INFO] ✓ 成功: %s | 耗时: %.2fs\n", firstProvider.Name, duration.Seconds())
-				if err := prs.blacklistService.RecordSuccess(kind, firstProvider.Name); err != nil {
-					fmt.Printf("[WARN] 清零失败计数失败: %v\n", err)
-				}
-				// 记录最后使用的供应商
-				prs.setLastUsedProvider(kind, firstProvider.Name)
-				return
-			}
-
-			// 失败：记录失败次数并返回错误（不降级到下一个 provider）
 			errorMsg := "未知错误"
-			if err != nil {
-				errorMsg = err.Error()
+			if lastError != nil {
+				errorMsg = lastError.Error()
 			}
-			fmt.Printf("[WARN] ✗ 失败: %s | 错误: %s | 耗时: %.2fs（拉黑模式，不降级）\n",
-				firstProvider.Name, errorMsg, duration.Seconds())
-
-			// 客户端中断不计入失败次数
-			if errors.Is(err, errClientAbort) {
-				fmt.Printf("[INFO] 客户端中断，跳过失败计数: %s\n", firstProvider.Name)
-			} else if err := prs.blacklistService.RecordFailure(kind, firstProvider.Name); err != nil {
-				fmt.Printf("[ERROR] 记录失败到黑名单失败: %v\n", err)
-			}
-
 			c.JSON(http.StatusBadGateway, gin.H{
-				"error":    fmt.Sprintf("Provider %s 请求失败: %s", firstProvider.Name, errorMsg),
-				"provider": firstProvider.Name,
-				"level":    firstLevel,
-				"duration": fmt.Sprintf("%.2fs", duration.Seconds()),
-				"mode":     "blacklist",
-				"hint":     "拉黑模式已开启，不自动降级。如需自动降级请关闭拉黑功能",
+				"error":         fmt.Sprintf("所有 Provider 都失败或被拉黑，最后尝试: %s - %s", lastProvider, errorMsg),
+				"lastProvider":  lastProvider,
+				"totalAttempts": totalAttempts,
+				"mode":          "blacklist_retry",
+				"hint":          "拉黑模式已开启，同 Provider 重试到拉黑再切换。如需立即降级请关闭拉黑功能",
 			})
 			return
 		}
 
 		// 【降级模式】：拉黑功能关闭，失败自动尝试下一个 provider
-		fmt.Printf("[INFO] 🔄 降级模式（拉黑功能已关闭）\n")
+		roundRobinEnabled := prs.isRoundRobinEnabled()
+		if roundRobinEnabled {
+			fmt.Printf("[INFO] 🔄 降级模式 + 轮询负载均衡\n")
+		} else {
+			fmt.Printf("[INFO] 🔄 降级模式（顺序降级）\n")
+		}
 
 		var lastError error
 		var lastProvider string
@@ -397,6 +578,12 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 
 		for _, level := range levels {
 			providersInLevel := levelGroups[level]
+
+			// 如果启用轮询，对同 Level 的 providers 进行轮询排序
+			if roundRobinEnabled {
+				providersInLevel = prs.roundRobinOrder(kind, level, providersInLevel)
+			}
+
 			fmt.Printf("[INFO] === 尝试 Level %d（%d 个 provider）===\n", level, len(providersInLevel))
 
 			for i, provider := range providersInLevel {
@@ -818,7 +1005,6 @@ func CodexParseTokenUsageFromResponse(data string, usage *ReqeustLog) {
 	usage.OutputTokens += int(gjson.Get(data, "response.usage.output_tokens").Int())
 	usage.CacheReadTokens += int(gjson.Get(data, "response.usage.input_tokens_details.cached_tokens").Int())
 	usage.ReasoningTokens += int(gjson.Get(data, "response.usage.output_tokens_details.reasoning_tokens").Int())
-	fmt.Println("data ---->", data, fmt.Sprintf("%v", usage))
 }
 
 // gemini usage parser (流式响应专用)
@@ -1081,53 +1267,123 @@ func (prs *ProviderRelayService) geminiProxyHandler(apiVersion string) gin.Handl
 		// 获取拉黑功能开关状态
 		blacklistEnabled := prs.blacklistService.ShouldUseFixedMode()
 
-		// 【拉黑模式】：只尝试第一个 provider，失败直接返回错误（不自动降级）
+		// 【拉黑模式】：同 Provider 重试直到被拉黑，然后切换到下一个 Provider
 		if blacklistEnabled {
-			fmt.Printf("[Gemini] 🔒 拉黑模式已开启，禁用自动降级\n")
+			fmt.Printf("[Gemini] 🔒 拉黑模式已开启（同 Provider 重试到拉黑再切换）\n")
 
-			// 找到第一个 provider（按 Level 升序）
-			var firstProvider *GeminiProvider
+			// 获取重试配置
+			retryConfig := prs.blacklistService.GetRetryConfig()
+			maxRetryPerProvider := retryConfig.FailureThreshold
+			retryWaitSeconds := retryConfig.RetryWaitSeconds
+			fmt.Printf("[Gemini] 重试配置: 每 Provider 最多 %d 次重试，间隔 %d 秒\n",
+				maxRetryPerProvider, retryWaitSeconds)
+
+			var lastError string
+			var lastProvider string
+			totalAttempts := 0
+
+			// 遍历所有 Level 和 Provider
 			for _, level := range sortedLevels {
-				if len(levelGroups[level]) > 0 {
-					p := levelGroups[level][0]
-					firstProvider = &p
-					break
+				providersInLevel := levelGroups[level]
+				fmt.Printf("[Gemini] === 尝试 Level %d（%d 个 provider）===\n", level, len(providersInLevel))
+
+				for _, provider := range providersInLevel {
+					// 检查是否已被拉黑（跳过已拉黑的 provider）
+					if blacklisted, until := prs.blacklistService.IsBlacklisted("gemini", provider.Name); blacklisted {
+						fmt.Printf("[Gemini] ⏭️ 跳过已拉黑的 Provider: %s (解禁时间: %v)\n", provider.Name, until)
+						continue
+					}
+
+					// 预填日志
+					requestLog.Provider = provider.Name
+					requestLog.Model = provider.Model
+
+					// 同 Provider 内重试循环
+					for retryCount := 0; retryCount < maxRetryPerProvider; retryCount++ {
+						totalAttempts++
+
+						// 再次检查是否已被拉黑（重试过程中可能被拉黑）
+						if blacklisted, _ := prs.blacklistService.IsBlacklisted("gemini", provider.Name); blacklisted {
+							fmt.Printf("[Gemini] 🚫 Provider %s 已被拉黑，切换到下一个\n", provider.Name)
+							break
+						}
+
+						fmt.Printf("[Gemini] [拉黑模式] Provider: %s (Level %d) | 重试 %d/%d\n",
+							provider.Name, level, retryCount+1, maxRetryPerProvider)
+
+						ok, errMsg, responseWritten := prs.forwardGeminiRequest(c, &provider, endpoint, bodyBytes, isStream, requestLog)
+						if ok {
+							fmt.Printf("[Gemini] ✓ 成功: %s | 重试 %d 次\n", provider.Name, retryCount+1)
+							_ = prs.blacklistService.RecordSuccess("gemini", provider.Name)
+							prs.setLastUsedProvider("gemini", provider.Name)
+							return
+						}
+
+						// 【关键修复】如果响应已写入客户端，不能重试或降级，直接返回
+						if responseWritten {
+							fmt.Printf("[Gemini] ⚠️ 响应已部分写入，无法重试: %s | 错误: %s\n", provider.Name, errMsg)
+							_ = prs.blacklistService.RecordFailure("gemini", provider.Name)
+							return
+						}
+
+						// 失败处理
+						lastError = errMsg
+						lastProvider = provider.Name
+
+						fmt.Printf("[Gemini] ✗ 失败: %s | 重试 %d/%d | 错误: %s\n",
+							provider.Name, retryCount+1, maxRetryPerProvider, errMsg)
+
+						// 记录失败次数（可能触发拉黑）
+						_ = prs.blacklistService.RecordFailure("gemini", provider.Name)
+
+						// 检查是否刚被拉黑
+						if blacklisted, _ := prs.blacklistService.IsBlacklisted("gemini", provider.Name); blacklisted {
+							fmt.Printf("[Gemini] 🚫 Provider %s 达到失败阈值，已被拉黑，切换到下一个\n", provider.Name)
+							break
+						}
+
+						// 等待后重试（除非是最后一次）
+						if retryCount < maxRetryPerProvider-1 {
+							fmt.Printf("[Gemini] ⏳ 等待 %d 秒后重试...\n", retryWaitSeconds)
+							time.Sleep(time.Duration(retryWaitSeconds) * time.Second)
+						}
+					}
 				}
 			}
 
-			if firstProvider == nil {
-				c.JSON(http.StatusNotFound, gin.H{"error": "no providers available"})
-				return
-			}
+			// 所有 Provider 都失败或被拉黑
+			fmt.Printf("[Gemini] 💥 拉黑模式：所有 Provider 都失败或被拉黑（共尝试 %d 次）\n", totalAttempts)
 
-			// 预填日志（失败也能记录尝试的 provider 与模型）
-			requestLog.Provider = firstProvider.Name
-			requestLog.Model = firstProvider.Model
-
-			// 尝试第一个 provider
-			ok, err := prs.forwardGeminiRequest(c, firstProvider, endpoint, bodyBytes, isStream, requestLog)
-			if ok {
-				_ = prs.blacklistService.RecordSuccess("gemini", firstProvider.Name)
-				// 记录最后使用的供应商
-				prs.setLastUsedProvider("gemini", firstProvider.Name)
-			} else {
-				_ = prs.blacklistService.RecordFailure("gemini", firstProvider.Name)
-				if requestLog.HttpCode == 0 {
-					requestLog.HttpCode = http.StatusBadGateway
-				}
-				c.JSON(http.StatusBadGateway, gin.H{
-					"error":   fmt.Sprintf("provider %s failed", firstProvider.Name),
-					"details": err,
-					"hint":    "拉黑模式已开启，不会自动降级。请等待 provider 恢复或手动切换。",
-				})
+			if requestLog.HttpCode == 0 {
+				requestLog.HttpCode = http.StatusBadGateway
 			}
+			c.JSON(http.StatusBadGateway, gin.H{
+				"error":         fmt.Sprintf("所有 Provider 都失败或被拉黑，最后尝试: %s - %s", lastProvider, lastError),
+				"lastProvider":  lastProvider,
+				"totalAttempts": totalAttempts,
+				"mode":          "blacklist_retry",
+				"hint":          "拉黑模式已开启，同 Provider 重试到拉黑再切换。如需立即降级请关闭拉黑功能",
+			})
 			return
 		}
 
 		// 【降级模式】：按 Level 顺序尝试所有 provider
+		roundRobinEnabled := prs.isRoundRobinEnabled()
+		if roundRobinEnabled {
+			fmt.Printf("[Gemini] 🔄 降级模式 + 轮询负载均衡\n")
+		} else {
+			fmt.Printf("[Gemini] 🔄 降级模式（顺序降级）\n")
+		}
+
 		var lastError string
 		for _, level := range sortedLevels {
 			providersInLevel := levelGroups[level]
+
+			// 如果启用轮询，对同 Level 的 providers 进行轮询排序
+			if roundRobinEnabled {
+				providersInLevel = prs.roundRobinOrderGemini(level, providersInLevel)
+			}
+
 			fmt.Printf("[Gemini] === 尝试 Level %d（%d 个 provider）===\n", level, len(providersInLevel))
 
 			for idx, provider := range providersInLevel {
@@ -1137,13 +1393,20 @@ func (prs *ProviderRelayService) geminiProxyHandler(apiVersion string) gin.Handl
 				requestLog.Provider = provider.Name
 				requestLog.Model = provider.Model
 
-				ok, errMsg := prs.forwardGeminiRequest(c, &provider, endpoint, bodyBytes, isStream, requestLog)
+				ok, errMsg, responseWritten := prs.forwardGeminiRequest(c, &provider, endpoint, bodyBytes, isStream, requestLog)
 				if ok {
 					_ = prs.blacklistService.RecordSuccess("gemini", provider.Name)
 					// 记录最后使用的供应商
 					prs.setLastUsedProvider("gemini", provider.Name)
 					fmt.Printf("[Gemini] ✓ 请求完成 | Provider: %s | 总耗时: %.2fs\n", provider.Name, time.Since(start).Seconds())
 					return // 成功，退出
+				}
+
+				// 【关键修复】如果响应已写入客户端，不能降级到其他 provider，直接返回
+				if responseWritten {
+					fmt.Printf("[Gemini] ⚠️ 响应已部分写入，无法降级: %s | 错误: %s\n", provider.Name, errMsg)
+					_ = prs.blacklistService.RecordFailure("gemini", provider.Name)
+					return
 				}
 
 				// 失败，记录并继续
@@ -1193,7 +1456,8 @@ func extractGeminiModelFromEndpoint(endpoint string) string {
 }
 
 // forwardGeminiRequest 转发 Gemini 请求到指定 provider
-// 返回 (成功, 错误信息)
+// 返回 (成功, 错误信息, 是否已写入响应)
+// 【重要】当 responseWritten=true 时，调用方不得重试或降级，因为响应头/数据已发送给客户端
 func (prs *ProviderRelayService) forwardGeminiRequest(
 	c *gin.Context,
 	provider *GeminiProvider,
@@ -1201,7 +1465,7 @@ func (prs *ProviderRelayService) forwardGeminiRequest(
 	bodyBytes []byte,
 	isStream bool,
 	requestLog *ReqeustLog,
-) (bool, string) {
+) (success bool, errMsg string, responseWritten bool) {
 	providerStart := time.Now()
 
 	// 构建目标 URL
@@ -1209,6 +1473,8 @@ func (prs *ProviderRelayService) forwardGeminiRequest(
 
 	// 预先填充日志，保证失败也能记录 provider 和模型
 	requestLog.Provider = provider.Name
+	// 【修复】每次尝试开始前重置 HttpCode，避免重试时沿用上一次的状态码
+	requestLog.HttpCode = 0
 	// 优先从 endpoint 提取模型名（如 gemini-2.5-pro），否则回退到 provider.Model
 	if extractedModel := extractGeminiModelFromEndpoint(endpoint); extractedModel != "" {
 		requestLog.Model = extractedModel
@@ -1219,7 +1485,7 @@ func (prs *ProviderRelayService) forwardGeminiRequest(
 	// 创建 HTTP 请求
 	req, err := http.NewRequest("POST", targetURL, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return false, fmt.Sprintf("创建请求失败: %v", err)
+		return false, fmt.Sprintf("创建请求失败: %v", err), false
 	}
 
 	// 复制请求头
@@ -1241,7 +1507,7 @@ func (prs *ProviderRelayService) forwardGeminiRequest(
 
 	if err != nil {
 		fmt.Printf("[Gemini]   ✗ 失败: %s | 错误: %v | 耗时: %.2fs\n", provider.Name, err, providerDuration)
-		return false, fmt.Sprintf("请求失败: %v", err)
+		return false, fmt.Sprintf("请求失败: %v", err), false
 	}
 	defer resp.Body.Close()
 
@@ -1252,42 +1518,48 @@ func (prs *ProviderRelayService) forwardGeminiRequest(
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		errorBody, _ := io.ReadAll(resp.Body)
 		fmt.Printf("[Gemini]   ✗ 失败: %s | HTTP %d | 耗时: %.2fs\n", provider.Name, resp.StatusCode, providerDuration)
-		return false, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(errorBody))
+		return false, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(errorBody)), false
 	}
 
 	fmt.Printf("[Gemini]   ✓ 连接成功: %s | HTTP %d | 耗时: %.2fs\n", provider.Name, resp.StatusCode, providerDuration)
 
-	// 复制响应头
-	for key, values := range resp.Header {
-		for _, value := range values {
-			c.Header(key, value)
-		}
-	}
-	c.Status(resp.StatusCode)
-
 	// 处理响应
 	if isStream {
+		// 流式模式：先写 header 再流式传输
+		for key, values := range resp.Header {
+			for _, value := range values {
+				c.Header(key, value)
+			}
+		}
+		c.Status(resp.StatusCode)
 		c.Writer.Flush()
-		// 使用 SSE 解析器提取 token 用量
+		// 【重要】从 Flush() 开始，响应头已写入客户端，任何失败都不能重试
 		copyErr := streamGeminiResponseWithHook(resp.Body, c.Writer, requestLog)
 		if copyErr != nil {
 			fmt.Printf("[Gemini]   ⚠️ 流式传输中断: %s | 错误: %v\n", provider.Name, copyErr)
-			// 【修复】流式传输中断应标记为失败（虽然无法重试，但需记录健康度）
-			// 注意：已写入部分响应，客户端会收到不完整数据
-			return false, fmt.Sprintf("流式传输中断: %v", copyErr)
+			// 流式传输中断：已写入部分响应，客户端会收到不完整数据
+			return false, fmt.Sprintf("流式传输中断: %v", copyErr), true
 		}
 	} else {
+		// 非流式模式：先读完 body 再写 header（允许读取失败时重试）
 		body, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
 			fmt.Printf("[Gemini]   ⚠️ 读取响应失败: %s | 错误: %v\n", provider.Name, readErr)
-			return false, fmt.Sprintf("读取响应失败: %v", readErr)
+			// 【修复】此时 header 尚未写入客户端，可以重试/降级
+			return false, fmt.Sprintf("读取响应失败: %v", readErr), false
 		}
 		// 解析 Gemini 用量数据
 		parseGeminiUsageMetadata(body, requestLog)
+		// 读取成功后再写 header 和 body
+		for key, values := range resp.Header {
+			for _, value := range values {
+				c.Header(key, value)
+			}
+		}
 		c.Data(resp.StatusCode, resp.Header.Get("Content-Type"), body)
 	}
 
-	return true, ""
+	return true, "", true
 }
 
 // parseGeminiUsageMetadata 从 Gemini 非流式响应中提取用量，填充 request_log
@@ -1418,81 +1690,137 @@ func (prs *ProviderRelayService) customCliProxyHandler() gin.HandlerFunc {
 		// 获取拉黑功能开关状态
 		blacklistEnabled := prs.blacklistService.ShouldUseFixedMode()
 
-		// 【拉黑模式】：只尝试第一个 provider，失败直接返回错误
+		// 【拉黑模式】：同 Provider 重试直到被拉黑，然后切换到下一个 Provider
 		if blacklistEnabled {
-			fmt.Printf("[CustomCLI][INFO] 🔒 拉黑模式已开启，禁用自动降级\n")
+			fmt.Printf("[CustomCLI][INFO] 🔒 拉黑模式已开启（同 Provider 重试到拉黑再切换）\n")
 
-			var firstProvider *Provider
-			var firstLevel int
+			// 获取重试配置
+			retryConfig := prs.blacklistService.GetRetryConfig()
+			maxRetryPerProvider := retryConfig.FailureThreshold
+			retryWaitSeconds := retryConfig.RetryWaitSeconds
+			fmt.Printf("[CustomCLI][INFO] 重试配置: 每 Provider 最多 %d 次重试，间隔 %d 秒\n",
+				maxRetryPerProvider, retryWaitSeconds)
+
+			var lastError error
+			var lastProvider string
+			totalAttempts := 0
+
+			// 遍历所有 Level 和 Provider
 			for _, level := range levels {
-				if len(levelGroups[level]) > 0 {
-					p := levelGroups[level][0]
-					firstProvider = &p
-					firstLevel = level
-					break
+				providersInLevel := levelGroups[level]
+				fmt.Printf("[CustomCLI][INFO] === 尝试 Level %d（%d 个 provider）===\n", level, len(providersInLevel))
+
+				for _, provider := range providersInLevel {
+					// 检查是否已被拉黑（跳过已拉黑的 provider）
+					if blacklisted, until := prs.blacklistService.IsBlacklisted(kind, provider.Name); blacklisted {
+						fmt.Printf("[CustomCLI][INFO] ⏭️ 跳过已拉黑的 Provider: %s (解禁时间: %v)\n", provider.Name, until)
+						continue
+					}
+
+					// 获取实际模型名
+					effectiveModel := provider.GetEffectiveModel(requestedModel)
+					currentBodyBytes := bodyBytes
+					if effectiveModel != requestedModel && requestedModel != "" {
+						fmt.Printf("[CustomCLI][INFO] Provider %s 映射模型: %s -> %s\n", provider.Name, requestedModel, effectiveModel)
+						modifiedBody, err := ReplaceModelInRequestBody(bodyBytes, effectiveModel)
+						if err != nil {
+							fmt.Printf("[CustomCLI][ERROR] 模型映射失败: %v，跳过此 Provider\n", err)
+							continue
+						}
+						currentBodyBytes = modifiedBody
+					}
+
+					// 获取有效端点
+					effectiveEndpoint := provider.GetEffectiveEndpoint(endpoint)
+
+					// 同 Provider 内重试循环
+					for retryCount := 0; retryCount < maxRetryPerProvider; retryCount++ {
+						totalAttempts++
+
+						// 再次检查是否已被拉黑（重试过程中可能被拉黑）
+						if blacklisted, _ := prs.blacklistService.IsBlacklisted(kind, provider.Name); blacklisted {
+							fmt.Printf("[CustomCLI][INFO] 🚫 Provider %s 已被拉黑，切换到下一个\n", provider.Name)
+							break
+						}
+
+						fmt.Printf("[CustomCLI][INFO] [拉黑模式] Provider: %s (Level %d) | 重试 %d/%d | Model: %s\n",
+							provider.Name, level, retryCount+1, maxRetryPerProvider, effectiveModel)
+
+						startTime := time.Now()
+						ok, err := prs.forwardRequest(c, kind, provider, effectiveEndpoint, query, clientHeaders, currentBodyBytes, isStream, effectiveModel)
+						duration := time.Since(startTime)
+
+						if ok {
+							fmt.Printf("[CustomCLI][INFO] ✓ 成功: %s | 重试 %d 次 | 耗时: %.2fs\n",
+								provider.Name, retryCount+1, duration.Seconds())
+							if err := prs.blacklistService.RecordSuccess(kind, provider.Name); err != nil {
+								fmt.Printf("[CustomCLI][WARN] 清零失败计数失败: %v\n", err)
+							}
+							prs.setLastUsedProvider(kind, provider.Name)
+							return
+						}
+
+						// 失败处理
+						lastError = err
+						lastProvider = provider.Name
+
+						errorMsg := "未知错误"
+						if err != nil {
+							errorMsg = err.Error()
+						}
+						fmt.Printf("[CustomCLI][WARN] ✗ 失败: %s | 重试 %d/%d | 错误: %s | 耗时: %.2fs\n",
+							provider.Name, retryCount+1, maxRetryPerProvider, errorMsg, duration.Seconds())
+
+						// 客户端中断不计入失败次数，直接返回
+						if errors.Is(err, errClientAbort) {
+							fmt.Printf("[CustomCLI][INFO] 客户端中断，停止重试\n")
+							return
+						}
+
+						// 记录失败次数（可能触发拉黑）
+						if err := prs.blacklistService.RecordFailure(kind, provider.Name); err != nil {
+							fmt.Printf("[CustomCLI][ERROR] 记录失败到黑名单失败: %v\n", err)
+						}
+
+						// 检查是否刚被拉黑
+						if blacklisted, _ := prs.blacklistService.IsBlacklisted(kind, provider.Name); blacklisted {
+							fmt.Printf("[CustomCLI][INFO] 🚫 Provider %s 达到失败阈值，已被拉黑，切换到下一个\n", provider.Name)
+							break
+						}
+
+						// 等待后重试（除非是最后一次）
+						if retryCount < maxRetryPerProvider-1 {
+							fmt.Printf("[CustomCLI][INFO] ⏳ 等待 %d 秒后重试...\n", retryWaitSeconds)
+							time.Sleep(time.Duration(retryWaitSeconds) * time.Second)
+						}
+					}
 				}
 			}
 
-			if firstProvider == nil {
-				c.JSON(http.StatusNotFound, gin.H{"error": "no providers available"})
-				return
-			}
-
-			effectiveModel := firstProvider.GetEffectiveModel(requestedModel)
-			currentBodyBytes := bodyBytes
-			if effectiveModel != requestedModel && requestedModel != "" {
-				fmt.Printf("[CustomCLI][INFO] Provider %s 映射模型: %s -> %s\n", firstProvider.Name, requestedModel, effectiveModel)
-				modifiedBody, err := ReplaceModelInRequestBody(bodyBytes, effectiveModel)
-				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("模型映射失败: %v", err)})
-					return
-				}
-				currentBodyBytes = modifiedBody
-			}
-
-			fmt.Printf("[CustomCLI][INFO] [拉黑模式] 使用 Provider: %s (Level %d) | Model: %s\n", firstProvider.Name, firstLevel, effectiveModel)
-			// 获取有效的端点（用户配置优先）
-			effectiveEndpoint := firstProvider.GetEffectiveEndpoint(endpoint)
-
-			startTime := time.Now()
-			ok, err := prs.forwardRequest(c, kind, *firstProvider, effectiveEndpoint, query, clientHeaders, currentBodyBytes, isStream, effectiveModel)
-			duration := time.Since(startTime)
-
-			if ok {
-				fmt.Printf("[CustomCLI][INFO] ✓ 成功: %s | 耗时: %.2fs\n", firstProvider.Name, duration.Seconds())
-				if err := prs.blacklistService.RecordSuccess(kind, firstProvider.Name); err != nil {
-					fmt.Printf("[CustomCLI][WARN] 清零失败计数失败: %v\n", err)
-				}
-				prs.setLastUsedProvider(kind, firstProvider.Name)
-				return
-			}
+			// 所有 Provider 都失败或被拉黑
+			fmt.Printf("[CustomCLI][ERROR] 💥 拉黑模式：所有 Provider 都失败或被拉黑（共尝试 %d 次）\n", totalAttempts)
 
 			errorMsg := "未知错误"
-			if err != nil {
-				errorMsg = err.Error()
+			if lastError != nil {
+				errorMsg = lastError.Error()
 			}
-			fmt.Printf("[CustomCLI][WARN] ✗ 失败: %s | 错误: %s | 耗时: %.2fs（拉黑模式，不降级）\n",
-				firstProvider.Name, errorMsg, duration.Seconds())
-
-			if errors.Is(err, errClientAbort) {
-				fmt.Printf("[CustomCLI][INFO] 客户端中断，跳过失败计数: %s\n", firstProvider.Name)
-			} else if err := prs.blacklistService.RecordFailure(kind, firstProvider.Name); err != nil {
-				fmt.Printf("[CustomCLI][ERROR] 记录失败到黑名单失败: %v\n", err)
-			}
-
 			c.JSON(http.StatusBadGateway, gin.H{
-				"error":    fmt.Sprintf("Provider %s 请求失败: %s", firstProvider.Name, errorMsg),
-				"provider": firstProvider.Name,
-				"level":    firstLevel,
-				"duration": fmt.Sprintf("%.2fs", duration.Seconds()),
-				"mode":     "blacklist",
-				"hint":     "拉黑模式已开启，不自动降级。如需自动降级请关闭拉黑功能",
+				"error":         fmt.Sprintf("所有 Provider 都失败或被拉黑，最后尝试: %s - %s", lastProvider, errorMsg),
+				"lastProvider":  lastProvider,
+				"totalAttempts": totalAttempts,
+				"mode":          "blacklist_retry",
+				"hint":          "拉黑模式已开启，同 Provider 重试到拉黑再切换。如需立即降级请关闭拉黑功能",
 			})
 			return
 		}
 
 		// 【降级模式】：失败自动尝试下一个 provider
-		fmt.Printf("[CustomCLI][INFO] 🔄 降级模式（拉黑功能已关闭）\n")
+		roundRobinEnabled := prs.isRoundRobinEnabled()
+		if roundRobinEnabled {
+			fmt.Printf("[CustomCLI][INFO] 🔄 降级模式 + 轮询负载均衡\n")
+		} else {
+			fmt.Printf("[CustomCLI][INFO] 🔄 降级模式（顺序降级）\n")
+		}
 
 		var lastError error
 		var lastProvider string
@@ -1501,6 +1829,12 @@ func (prs *ProviderRelayService) customCliProxyHandler() gin.HandlerFunc {
 
 		for _, level := range levels {
 			providersInLevel := levelGroups[level]
+
+			// 如果启用轮询，对同 Level 的 providers 进行轮询排序
+			if roundRobinEnabled {
+				providersInLevel = prs.roundRobinOrder(kind, level, providersInLevel)
+			}
+
 			fmt.Printf("[CustomCLI][INFO] === 尝试 Level %d（%d 个 provider）===\n", level, len(providersInLevel))
 
 			for i, provider := range providersInLevel {

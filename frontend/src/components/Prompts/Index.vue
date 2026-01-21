@@ -85,12 +85,26 @@ function openCreateModal() {
   })
 }
 
-function openEditModal(prompt: Prompt) {
+async function openEditModal(prompt: Prompt) {
   editingPrompt.value = prompt
+
+  // 如果是已启用的提示词，从文件读取最新内容
+  let content = prompt.content
+  if (prompt.enabled) {
+    try {
+      const fileContent = await GetCurrentFileContent(activePlatform.value)
+      if (fileContent !== null) {
+        content = fileContent
+      }
+    } catch (e) {
+      console.error('Failed to get current file content:', e)
+    }
+  }
+
   formData.value = {
     id: prompt.id,
     name: prompt.name,
-    content: prompt.content,
+    content: content,
     description: prompt.description || '',
     enabled: prompt.enabled
   }

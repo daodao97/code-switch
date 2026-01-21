@@ -29,8 +29,9 @@ type PromptConfig struct {
 
 // PromptService 提示词管理服务
 type PromptService struct {
-	mu     sync.Mutex
-	config PromptConfig
+	mu            sync.Mutex
+	config        PromptConfig
+	lastWriteTime map[string]time.Time // 记录应用最后写入时间，用于回环检测
 }
 
 // NewPromptService 创建提示词服务
@@ -41,6 +42,7 @@ func NewPromptService() *PromptService {
 			Codex:  make(map[string]Prompt),
 			Gemini: make(map[string]Prompt),
 		},
+		lastWriteTime: make(map[string]time.Time),
 	}
 	_ = svc.load()
 	return svc
@@ -60,6 +62,23 @@ func (s *PromptService) Stop() error {
 func (s *PromptService) GetPrompts(platform string) (map[string]Prompt, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// 检测并同步外部修改（使用只读路径函数，避免创建目录副作用）
+	filePath, err := s.getPromptFilePathReadOnly(platform)
+	if err != nil {
+		return nil, err
+	}
+
+	externallyModified, fileModTime, err := s.isExternallyModified(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	if externallyModified {
+		if err := s.syncFromFile(platform, filePath, fileModTime); err != nil {
+			return nil, err
+		}
+	}
 
 	switch platform {
 	case "claude":
@@ -233,7 +252,7 @@ func (s *PromptService) ImportFromFile(platform string) (string, error) {
 
 // GetCurrentFileContent 获取当前提示词文件内容
 func (s *PromptService) GetCurrentFileContent(platform string) (*string, error) {
-	filePath, err := s.getPromptFilePath(platform)
+	filePath, err := s.getPromptFilePathReadOnly(platform)
 	if err != nil {
 		return nil, err
 	}
@@ -332,8 +351,8 @@ func (s *PromptService) getPromptsForPlatform(platform string) (*map[string]Prom
 	}
 }
 
-// getPromptFilePath 获取提示词文件路径
-func (s *PromptService) getPromptFilePath(platform string) (string, error) {
+// getPromptFilePathReadOnly 获取提示词文件路径（只读，不创建目录）
+func (s *PromptService) getPromptFilePathReadOnly(platform string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("无法获取用户主目录: %w", err)
@@ -354,12 +373,23 @@ func (s *PromptService) getPromptFilePath(platform string) (string, error) {
 		return "", fmt.Errorf("不支持的平台: %s", platform)
 	}
 
+	return filepath.Join(dir, filename), nil
+}
+
+// getPromptFilePath 获取提示词文件路径（会创建目录）
+func (s *PromptService) getPromptFilePath(platform string) (string, error) {
+	filePath, err := s.getPromptFilePathReadOnly(platform)
+	if err != nil {
+		return "", err
+	}
+
 	// 确保目录存在
+	dir := filepath.Dir(filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", fmt.Errorf("创建目录失败: %w", err)
 	}
 
-	return filepath.Join(dir, filename), nil
+	return filePath, nil
 }
 
 // writePromptFile 原子写入提示词文件
@@ -379,6 +409,106 @@ func (s *PromptService) writePromptFile(path, content string) error {
 	if err := os.Rename(tmpPath, path); err != nil {
 		os.Remove(tmpPath) // 清理临时文件
 		return fmt.Errorf("重命名文件失败: %w", err)
+	}
+
+	// 记录写入时间，用于回环检测
+	if info, err := os.Stat(path); err == nil {
+		s.lastWriteTime[path] = info.ModTime()
+	} else {
+		s.lastWriteTime[path] = time.Now()
+	}
+
+	return nil
+}
+
+// isExternallyModified 检测文件是否被外部修改
+func (s *PromptService) isExternallyModified(filePath string) (bool, time.Time, error) {
+	info, err := os.Stat(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, time.Time{}, nil
+		}
+		return false, time.Time{}, err
+	}
+
+	modTime := info.ModTime()
+	last, ok := s.lastWriteTime[filePath]
+	if !ok {
+		// 首次访问，认为是外部修改（需要同步）
+		return true, modTime, nil
+	}
+
+	// 使用 100ms 容差处理时间精度问题
+	const tolerance = 100 * time.Millisecond
+	if modTime.After(last.Add(tolerance)) || modTime.Before(last.Add(-tolerance)) {
+		return true, modTime, nil
+	}
+
+	return false, modTime, nil
+}
+
+// syncFromFile 从文件同步到已启用的提示词
+func (s *PromptService) syncFromFile(platform, filePath string, fileModTime time.Time) error {
+	prompts, err := s.getPromptsForPlatform(platform)
+	if err != nil {
+		return err
+	}
+
+	// 查找已启用的提示词
+	var enabledID string
+	var enabledPrompt Prompt
+	found := false
+	for id, p := range *prompts {
+		if p.Enabled {
+			enabledID = id
+			enabledPrompt = p
+			found = true
+			break
+		}
+	}
+
+	// 没有启用的提示词，不做处理
+	if !found {
+		// 更新 lastWriteTime 避免重复检测
+		if !fileModTime.IsZero() {
+			s.lastWriteTime[filePath] = fileModTime
+		}
+		return nil
+	}
+
+	// 读取文件内容
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("读取提示词文件失败: %w", err)
+	}
+
+	contentStr := string(content)
+
+	// 内容相同，无需同步
+	if enabledPrompt.Content == contentStr {
+		if !fileModTime.IsZero() {
+			s.lastWriteTime[filePath] = fileModTime
+		}
+		return nil
+	}
+
+	// 回填到已启用的提示词
+	now := time.Now().Unix()
+	enabledPrompt.Content = contentStr
+	enabledPrompt.UpdatedAt = &now
+	(*prompts)[enabledID] = enabledPrompt
+
+	// 持久化到 prompts.json
+	if err := s.save(); err != nil {
+		return err
+	}
+
+	// 更新 lastWriteTime
+	if !fileModTime.IsZero() {
+		s.lastWriteTime[filePath] = fileModTime
 	}
 
 	return nil

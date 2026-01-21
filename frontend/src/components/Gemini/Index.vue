@@ -218,12 +218,9 @@
           <BaseInput
             v-model="modalState.form.apiKey"
             type="password"
-            :disabled="saving || modalState.editing"
+            :disabled="saving"
             placeholder="sk-xxx"
           />
-          <p v-if="modalState.editing" class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-            {{ t('components.gemini.form.apiKeyReadonlyHint') }}
-          </p>
         </label>
 
         <label class="form-field">
@@ -305,6 +302,7 @@ const modalState = reactive({
   open: false,
   editing: false,
   editingId: '',
+  originalProvider: null as BindingGeminiProvider | null,
   presetMode: false,
   presetName: '',
   form: {
@@ -399,6 +397,7 @@ const openEditModal = (provider: BindingGeminiProvider) => {
   modalState.open = true
   modalState.editing = true
   modalState.editingId = provider.id
+  modalState.originalProvider = provider
   modalState.presetMode = false
   modalState.form.name = provider.name
   modalState.form.baseUrl = provider.baseUrl ?? ''
@@ -408,6 +407,9 @@ const openEditModal = (provider: BindingGeminiProvider) => {
 
 const closeModal = () => {
   modalState.open = false
+  modalState.editing = false
+  modalState.editingId = ''
+  modalState.originalProvider = null
 }
 
 const submitModal = async () => {
@@ -420,15 +422,23 @@ const submitModal = async () => {
         throw new Error('创建供应商失败')
       }
     } else if (modalState.editing) {
-      // 更新
+      // 更新：基于原始对象合并，保留 partnerPromotionKey/category 等字段
+      const original = modalState.originalProvider
+        ?? providers.value.find(p => p.id === modalState.editingId)
+      if (!original) {
+        throw new Error('未找到要更新的供应商')
+      }
+
       await UpdateProvider({
+        ...original,
         id: modalState.editingId,
         name: modalState.form.name,
         baseUrl: modalState.form.baseUrl,
         apiKey: modalState.form.apiKey,
         model: modalState.form.model,
-        enabled: false,
+        enabled: original.enabled, // 保持启用状态不变
         envConfig: {
+          ...(original.envConfig ?? {}),
           GOOGLE_GEMINI_BASE_URL: modalState.form.baseUrl,
           GEMINI_API_KEY: modalState.form.apiKey,
           GEMINI_MODEL: modalState.form.model,

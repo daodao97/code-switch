@@ -126,10 +126,12 @@ func (s *CliConfigService) GetConfig(platform string) (*CLIConfig, error) {
 // GetConfigSnapshots 获取指定平台的配置快照，用于前端展示"当前(磁盘)"与"预览(激活后)"对比。
 // 这是纯 dry-run 接口：不会对任何文件进行写入。
 //
-// 预览规则：
-//   - 若传入 apiUrl/apiKey 任一非空：模拟 ApplySingleProvider() 的写入结果（直连模式）
-//   - 若二者都为空：模拟 EnableProxy() 的写入结果（代理模式）
-func (s *CliConfigService) GetConfigSnapshots(platform string, apiUrl string, apiKey string) (*CLIConfigSnapshots, error) {
+// previewMode 参数：
+//   - "current": Preview = Current（不做任何注入，适用于新建供应商空输入）
+//   - "direct": 模拟直连应用 ApplySingleProvider() 的写入结果
+//   - "proxy": 模拟启用代理 EnableProxy() 的写入结果
+//   - "" (空字符串): 兼容旧逻辑，若 apiUrl/apiKey 任一非空则为 direct，否则为 proxy
+func (s *CliConfigService) GetConfigSnapshots(platform string, apiUrl string, apiKey string, previewMode string) (*CLIConfigSnapshots, error) {
 	if err := s.requireHome(); err != nil {
 		return nil, err
 	}
@@ -147,38 +149,26 @@ func (s *CliConfigService) GetConfigSnapshots(platform string, apiUrl string, ap
 		return string(content), nil
 	}
 
-	// 传入了 provider 配置则视为"直连预览"；否则视为"代理预览"
-	previewDirect := strings.TrimSpace(apiUrl) != "" || strings.TrimSpace(apiKey) != ""
-
-	// .env 稳定序列化：按键排序输出，并跳过空值
-	serializeEnvNoEmpty := func(envMap map[string]string) string {
-		if envMap == nil {
-			return ""
+	// 解析 previewMode 参数
+	// effectiveMode 取值: "current", "direct", "proxy"
+	var effectiveMode string
+	previewModeTrim := strings.ToLower(strings.TrimSpace(previewMode))
+	switch previewModeTrim {
+	case "":
+		// 兼容旧逻辑：任一非空 => direct，否则 => proxy
+		if strings.TrimSpace(apiUrl) != "" || strings.TrimSpace(apiKey) != "" {
+			effectiveMode = "direct"
+		} else {
+			effectiveMode = "proxy"
 		}
-		keys := make([]string, 0, len(envMap))
-		for k, v := range envMap {
-			if strings.TrimSpace(k) == "" || v == "" {
-				continue
-			}
-			keys = append(keys, k)
-		}
-		for i := 0; i < len(keys); i++ {
-			for j := i + 1; j < len(keys); j++ {
-				if keys[i] > keys[j] {
-					keys[i], keys[j] = keys[j], keys[i]
-				}
-			}
-		}
-		lines := make([]string, 0, len(keys))
-		for _, k := range keys {
-			lines = append(lines, fmt.Sprintf("%s=%s", k, envMap[k]))
-		}
-		out := strings.Join(lines, "\n")
-		if out != "" {
-			out += "\n"
-		}
-		return out
+	case "current", "direct", "proxy":
+		effectiveMode = previewModeTrim
+	default:
+		return nil, fmt.Errorf("无效的 previewMode: %s（允许值: current, direct, proxy）", previewMode)
 	}
+
+	// 用于旧代码兼容的布尔标志
+	previewDirect := effectiveMode == "direct"
 
 	switch p {
 	case PlatformClaude:
@@ -210,6 +200,18 @@ func (s *CliConfigService) GetConfigSnapshots(platform string, apiUrl string, ap
 					}
 				}
 			}
+		}
+
+		// current 模式：Preview = Current（不做任何注入）
+		if effectiveMode == "current" {
+			// 深拷贝 currentFiles 避免引用共享
+			previewFiles := make([]CLIConfigFile, len(currentFiles))
+			copy(previewFiles, currentFiles)
+			return &CLIConfigSnapshots{
+				CurrentFiles: currentFiles,
+				PreviewFiles: previewFiles,
+				Mode:         currentMode,
+			}, nil
 		}
 
 		// 构造预览：最小侵入，仅更新锁定字段
@@ -282,6 +284,18 @@ func (s *CliConfigService) GetConfigSnapshots(platform string, apiUrl string, ap
 			}
 		}
 
+		// current 模式：Preview = Current（不做任何注入）
+		if effectiveMode == "current" {
+			// 深拷贝 currentFiles 避免引用共享
+			previewFiles := make([]CLIConfigFile, len(currentFiles))
+			copy(previewFiles, currentFiles)
+			return &CLIConfigSnapshots{
+				CurrentFiles: currentFiles,
+				PreviewFiles: previewFiles,
+				Mode:         currentMode,
+			}, nil
+		}
+
 		// 解析现有 TOML
 		raw := make(map[string]any)
 		if strings.TrimSpace(currentConfig) != "" {
@@ -290,7 +304,13 @@ func (s *CliConfigService) GetConfigSnapshots(platform string, apiUrl string, ap
 			}
 		}
 
-		authPayload := map[string]string{}
+		// 解析现有 auth.json（用于 proxy 模式保留其他字段）
+		authPayload := make(map[string]any)
+		if strings.TrimSpace(currentAuth) != "" {
+			if err := json.Unmarshal([]byte(currentAuth), &authPayload); err != nil {
+				authPayload = make(map[string]any)
+			}
+		}
 
 		if previewDirect {
 			// 复用 provider 快照推导 providerKey
@@ -316,7 +336,8 @@ func (s *CliConfigService) GetConfigSnapshots(platform string, apiUrl string, ap
 			modelProviders[providerKey] = providerCfg
 			raw["model_providers"] = modelProviders
 
-			authPayload["OPENAI_API_KEY"] = apiKey
+			// direct 模式：只保留 OPENAI_API_KEY（与 writeDirectApplyAuthFile 一致）
+			authPayload = map[string]any{"OPENAI_API_KEY": apiKey}
 		} else {
 			raw["preferred_auth_method"] = "apikey"
 			raw["model_provider"] = "code-switch-r"
@@ -334,6 +355,7 @@ func (s *CliConfigService) GetConfigSnapshots(platform string, apiUrl string, ap
 			modelProviders["code-switch-r"] = providerCfg
 			raw["model_providers"] = modelProviders
 
+			// proxy 模式：保留其他字段，只更新 OPENAI_API_KEY（与 writeAuthFile 一致）
 			authPayload["OPENAI_API_KEY"] = "code-switch-r"
 		}
 
@@ -379,6 +401,18 @@ func (s *CliConfigService) GetConfigSnapshots(platform string, apiUrl string, ap
 			}
 		}
 
+		// current 模式：Preview = Current（不做任何注入）
+		if effectiveMode == "current" {
+			// 深拷贝 currentFiles 避免引用共享
+			previewFiles := make([]CLIConfigFile, len(currentFiles))
+			copy(previewFiles, currentFiles)
+			return &CLIConfigSnapshots{
+				CurrentFiles: currentFiles,
+				PreviewFiles: previewFiles,
+				Mode:         currentMode,
+			}, nil
+		}
+
 		envMap := parseEnvFile(currentEnv)
 		if envMap == nil {
 			envMap = make(map[string]string)
@@ -401,7 +435,7 @@ func (s *CliConfigService) GetConfigSnapshots(platform string, apiUrl string, ap
 		}
 
 		previewFiles := []CLIConfigFile{
-			{Path: envPath, Format: "env", Content: serializeEnvNoEmpty(envMap)},
+			{Path: envPath, Format: "env", Content: buildGeminiEnvContent(envMap)},
 		}
 
 		return &CLIConfigSnapshots{

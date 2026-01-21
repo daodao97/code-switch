@@ -22,6 +22,32 @@
     -ms-user-select: none;
 }
 
+/* 允许可编辑控件：兼容旧版 macOS WebKit 输入问题 */
+input,
+textarea,
+select,
+option,
+[contenteditable],
+[contenteditable="true"],
+[contenteditable="plaintext-only"],
+[role="textbox"],
+[contenteditable] * {
+    -webkit-user-select: text;
+    user-select: text;
+    -moz-user-select: text;
+    -ms-user-select: text;
+}
+
+/* 防止 Wails 拖拽区域影响可交互元素 */
+input,
+textarea,
+select,
+button,
+a,
+[contenteditable] {
+    -webkit-app-region: no-drag;
+}
+
 @font-face {
     font-family: "Inter";
     font-style: normal;

@@ -3,6 +3,40 @@
     "title": "My App",
     "login": "Login"
   },
+  "update": {
+    "newVersionReady": "New version ready",
+    "installNow": "Install Now",
+    "later": "Later",
+    "installing": "Installing..."
+  },
+  "settings": {
+    "network": {
+      "title": "Network Settings",
+      "listenMode": "Listen Mode",
+      "modes": {
+        "localhost": "Localhost Only (127.0.0.1)",
+        "wslAuto": "WSL Auto-Detect",
+        "lan": "LAN (0.0.0.0)",
+        "custom": "Custom Address"
+      },
+      "customAddress": "Custom Address",
+      "currentAddress": "Current Listen Address",
+      "lanWarningTitle": "Security Warning",
+      "lanWarningText": "LAN mode exposes your API keys to the local network. Only use this in trusted environments.",
+      "wslTitle": "WSL Configuration",
+      "wslAutoConfig": "WSL Auto-Configure",
+      "wslAutoConfigHint": "Automatically configure CLI tools in WSL to use host proxy",
+      "wslStatus": "WSL Status",
+      "wslDetected": "WSL Detected",
+      "wslNotDetected": "WSL Not Detected",
+      "wslDistros": "Detected Distros",
+      "targetCli": "Target CLI Tools",
+      "configureNow": "Configure Now",
+      "configureSuccess": "WSL CLI tools configured successfully",
+      "configureFailed": "Failed to configure WSL CLI tools",
+      "saveFailed": "Failed to save network settings"
+    }
+  },
   "menus": {
     "about": "About",
     "general": "General settings",
@@ -340,6 +374,7 @@
         "actions": {
           "cancel": "Cancel",
           "save": "Save",
+          "saveAndApply": "Save & Apply",
           "delete": "Delete",
           "testConnectivity": "Test Connectivity",
           "testing": "Testing..."
@@ -501,6 +536,8 @@
         "autoStart": "Launch at login",
         "switchNotify": "Switch Notification",
         "switchNotifyHint": "Send system notification when provider switches or gets blacklisted",
+        "roundRobin": "Same-Level Round Robin",
+        "roundRobinHint": "When enabled, providers at the same Level take turns handling requests; when disabled, always starts from the first",
         "autoUpdate": "Automatic update",
         "autoConnectivityTest": "Auto Availability Monitoring",
         "autoConnectivityTestHint": "Automatically check availability of monitored providers every minute",
@@ -747,15 +784,30 @@
         "title": "Claude Skill",
         "lead": "Fetch Claude skills from the managed repositories. Click the top-right button to add more sources."
       },
+      "platform": {
+        "claude": "Claude Code",
+        "codex": "Codex"
+      },
+      "groups": {
+        "project": "Project Skills",
+        "user": "User Skills",
+        "available": "Available Skills"
+      },
       "actions": {
         "back": "Back to home",
         "loading": "Processing...",
         "refresh": "Refresh list",
         "view": "View on GitHub",
-        "install": "Install to Claude Code",
+        "install": "Install",
         "uninstall": "Uninstall",
         "installError": "Failed to install {name}. Please retry",
-        "uninstallError": "Failed to uninstall {name}. Please retry"
+        "uninstallError": "Failed to uninstall {name}. Please retry",
+        "toggle": "Enable/Disable",
+        "viewContent": "View Content",
+        "hideContent": "Hide Content",
+        "openFolder": "Open Folder",
+        "loadFailed": "Failed to load content",
+        "toggleError": "Failed to toggle skill status"
       },
       "list": {
         "title": "Available skills",
@@ -764,7 +816,23 @@
         "empty": "No skills detected in the repository.",
         "error": "Failed to load skills. Please check your network and retry.",
         "noDescription": "SKILL.md does not include a description",
-        "missingRepo": "Missing repository information for this skill"
+        "missingRepo": "Missing repository information for this skill",
+        "noInstalled": "No installed skills"
+      },
+      "install": {
+        "title": "Choose Install Location",
+        "desc": "Install {name} to:",
+        "locationLabel": "Install Location",
+        "userLevel": "User Level (Global)",
+        "userLevelDesc": "~/.{platform}/skills/",
+        "projectLevel": "Project Level (Current Directory)",
+        "projectLevelDesc": "./.{platform}/skills/",
+        "gitWarning": "Project skills may need to be added to .gitignore",
+        "installing": "Installing...",
+        "confirm": "Confirm Install"
+      },
+      "license": {
+        "complete": "Complete terms in {file}"
       },
       "repos": {
         "open": "Manage repositories",

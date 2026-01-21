@@ -5,6 +5,7 @@ import { Call } from '@wailsio/runtime'
 import ListItem from '../Setting/ListRow.vue'
 import LanguageSwitcher from '../Setting/LanguageSwitcher.vue'
 import ThemeSetting from '../Setting/ThemeSetting.vue'
+import NetworkWslSettings from '../Setting/NetworkWslSettings.vue'
 import { fetchAppSettings, saveAppSettings, type AppSettings } from '../../services/appSettings'
 import { checkUpdate, downloadUpdate, restartApp, getUpdateState, setAutoCheckEnabled, type UpdateState } from '../../services/update'
 import { fetchCurrentVersion } from '../../services/version'
@@ -27,6 +28,7 @@ const autoStartEnabled = ref(getCachedValue('autoStart', false))
 const autoUpdateEnabled = ref(getCachedValue('autoUpdate', true))
 const autoConnectivityTestEnabled = ref(getCachedValue('autoConnectivityTest', false))
 const switchNotifyEnabled = ref(getCachedValue('switchNotify', true)) // 切换通知开关
+const roundRobinEnabled = ref(getCachedValue('roundRobin', false))    // 同 Level 轮询开关
 const settingsLoading = ref(true)
 const saveBusy = ref(false)
 
@@ -64,6 +66,7 @@ const loadAppSettings = async () => {
     autoUpdateEnabled.value = data?.auto_update ?? true
     autoConnectivityTestEnabled.value = data?.auto_connectivity_test ?? false
     switchNotifyEnabled.value = data?.enable_switch_notify ?? true
+    roundRobinEnabled.value = data?.enable_round_robin ?? false
 
     // 缓存到 localStorage，下次打开时直接显示正确状态
     localStorage.setItem('app-settings-heatmap', String(heatmapEnabled.value))
@@ -72,6 +75,7 @@ const loadAppSettings = async () => {
     localStorage.setItem('app-settings-autoUpdate', String(autoUpdateEnabled.value))
     localStorage.setItem('app-settings-autoConnectivityTest', String(autoConnectivityTestEnabled.value))
     localStorage.setItem('app-settings-switchNotify', String(switchNotifyEnabled.value))
+    localStorage.setItem('app-settings-roundRobin', String(roundRobinEnabled.value))
   } catch (error) {
     console.error('failed to load app settings', error)
     heatmapEnabled.value = true
@@ -80,6 +84,7 @@ const loadAppSettings = async () => {
     autoUpdateEnabled.value = true
     autoConnectivityTestEnabled.value = false
     switchNotifyEnabled.value = true
+    roundRobinEnabled.value = false
   } finally {
     settingsLoading.value = false
   }
@@ -96,6 +101,7 @@ const persistAppSettings = async () => {
       auto_update: autoUpdateEnabled.value,
       auto_connectivity_test: autoConnectivityTestEnabled.value,
       enable_switch_notify: switchNotifyEnabled.value,
+      enable_round_robin: roundRobinEnabled.value,
     }
     await saveAppSettings(payload)
 
@@ -115,6 +121,7 @@ const persistAppSettings = async () => {
     localStorage.setItem('app-settings-autoUpdate', String(autoUpdateEnabled.value))
     localStorage.setItem('app-settings-autoConnectivityTest', String(autoConnectivityTestEnabled.value))
     localStorage.setItem('app-settings-switchNotify', String(switchNotifyEnabled.value))
+    localStorage.setItem('app-settings-roundRobin', String(roundRobinEnabled.value))
 
     window.dispatchEvent(new CustomEvent('app-settings-updated'))
   } catch (error) {
@@ -434,6 +441,20 @@ onMounted(async () => {
               <span class="hint-text">{{ $t('components.general.label.switchNotifyHint') }}</span>
             </div>
           </ListItem>
+          <ListItem :label="$t('components.general.label.roundRobin')">
+            <div class="toggle-with-hint">
+              <label class="mac-switch">
+                <input
+                  type="checkbox"
+                  :disabled="settingsLoading || saveBusy"
+                  v-model="roundRobinEnabled"
+                  @change="persistAppSettings"
+                />
+                <span></span>
+              </label>
+              <span class="hint-text">{{ $t('components.general.label.roundRobinHint') }}</span>
+            </div>
+          </ListItem>
         </div>
       </section>
 
@@ -456,6 +477,9 @@ onMounted(async () => {
           </ListItem>
         </div>
       </section>
+
+      <!-- Network & WSL Settings -->
+      <NetworkWslSettings />
 
       <section>
         <h2 class="mac-section-title">{{ $t('components.general.title.blacklist') }}</h2>

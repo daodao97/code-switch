@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"time"
@@ -191,4 +192,20 @@ func FindLatestBackup(configPath string) (string, error) {
 	}
 
 	return latestPath, nil
+}
+
+// OpenInExplorer 在系统文件管理器中打开指定目录
+func OpenInExplorer(path string) error {
+	var cmd *exec.Cmd
+
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("explorer", path)
+	case "darwin":
+		cmd = exec.Command("open", path)
+	default: // linux 等
+		cmd = exec.Command("xdg-open", path)
+	}
+
+	return cmd.Start()
 }

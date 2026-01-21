@@ -33,21 +33,23 @@ func (ss *SettingsService) GetBlacklistLevelConfig() (*BlacklistLevelConfig, err
 
 	var config *BlacklistLevelConfig
 
-	// 如果文件不存在，使用默认配置
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		config = DefaultBlacklistLevelConfig()
-	} else {
-		// 读取配置文件
+	// 【修复】始终以默认配置为基础，再用 JSON 覆盖存在的字段
+	// 这样旧版 JSON 中没有的新字段（如 RetryWaitSeconds）会保留默认值，而不是零值
+	config = DefaultBlacklistLevelConfig()
+
+	// 如果配置文件存在，用其内容覆盖默认值
+	if _, err := os.Stat(configPath); err == nil {
 		data, err := os.ReadFile(configPath)
 		if err != nil {
 			return nil, fmt.Errorf("读取配置文件失败: %w", err)
 		}
 
-		config = &BlacklistLevelConfig{}
+		// JSON Unmarshal 只会覆盖 JSON 中存在的字段，未出现的字段保持默认值
 		if err := json.Unmarshal(data, config); err != nil {
 			return nil, fmt.Errorf("解析配置文件失败: %w", err)
 		}
 	}
+	// 如果文件不存在，直接使用默认配置（已在上面初始化）
 
 	// 【关键修复】从数据库读取开关状态，覆盖 JSON 文件中的值
 	// 因为 UI 开关是通过 SetLevelBlacklistEnabled() 写入数据库的
