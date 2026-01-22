@@ -539,6 +539,8 @@
         "theme": "Theme mode",
         "heatmap": "Show dashboard heatmap",
         "homeTitle": "Show home title",
+        "budgetTotal": "Budget total",
+        "budgetTotalHint": "Used for tray menu progress (USD)",
         "autoStart": "Launch at login",
         "switchNotify": "Switch Notification",
         "switchNotifyHint": "Send system notification when provider switches or gets blacklisted",

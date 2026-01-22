@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "WebSearch",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "mcp__exa__web_search_exa",
+      "mcp__ace-tool__search_context"
     ],
     "deny": [],
     "ask": []

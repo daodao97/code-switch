@@ -4,3 +4,4 @@ frontend/dist
 .task
 bin
 CLAUDE.md
+.ace-tool/

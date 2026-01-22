@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -354,23 +355,23 @@ func main() {
 		systray.SetDarkModeIcon(darkIcon)
 	}
 
-	trayMenu := application.NewMenu()
-	trayMenu.Add("显示主窗口").OnClick(func(ctx *application.Context) {
-		showMainWindow(true)
-	})
-	trayMenu.Add("退出").OnClick(func(ctx *application.Context) {
-		app.Quit()
-	})
-	systray.SetMenu(trayMenu)
-
-	systray.OnClick(func() {
-		if !mainWindow.IsVisible() {
+	refreshTrayMenu := func() {
+		used, total := getTrayUsage(logService, appSettings)
+		trayMenu := buildUsageTrayMenu(used, total, func() {
 			showMainWindow(true)
-			return
-		}
-		if !mainWindow.IsFocused() {
-			focusMainWindow()
-		}
+		}, func() {
+			app.Quit()
+		})
+		systray.SetMenu(trayMenu)
+	}
+	refreshTrayMenu()
+	systray.OnClick(func() {
+		refreshTrayMenu()
+		systray.OpenMenu()
+	})
+	systray.OnRightClick(func() {
+		refreshTrayMenu()
+		systray.OpenMenu()
 	})
 
 	appservice.SetApp(app)
@@ -412,6 +413,82 @@ func handleDockVisibility(service *dock.DockService, show bool) {
 	} else {
 		service.HideAppIcon()
 	}
+}
+
+const trayProgressBarWidth = 28
+
+func getTrayUsage(logService *services.LogService, appSettings *services.AppSettingsService) (float64, float64) {
+	used := 0.0
+	total := 0.0
+	if logService != nil {
+		stats, err := logService.StatsSince("")
+		if err == nil {
+			used = stats.CostTotal
+		}
+	}
+	if appSettings != nil {
+		settings, err := appSettings.GetAppSettings()
+		if err == nil {
+			total = settings.BudgetTotal
+		}
+	}
+	if used < 0 {
+		used = 0
+	}
+	if total < 0 {
+		total = 0
+	}
+	return used, total
+}
+
+func buildUsageTrayMenu(used float64, total float64, onShow func(), onQuit func()) *application.Menu {
+	menu := application.NewMenu()
+	menu.Add(trayUsageLabel(used, total)).SetDisabled(true)
+	menu.Add(trayProgressLabel(used, total)).SetDisabled(true)
+	menu.AddSeparator()
+	menu.Add("显示主窗口").OnClick(func(ctx *application.Context) {
+		onShow()
+	})
+	menu.Add("退出").OnClick(func(ctx *application.Context) {
+		onQuit()
+	})
+	return menu
+}
+
+func trayUsageLabel(used float64, total float64) string {
+	usedLabel := formatCurrency(used)
+	if total <= 0 {
+		return fmt.Sprintf("今日已用 %s / 未设置", usedLabel)
+	}
+	return fmt.Sprintf("今日已用 %s / %s", usedLabel, formatCurrency(total))
+}
+
+func trayProgressLabel(used float64, total float64) string {
+	bar := strings.Repeat("-", trayProgressBarWidth)
+	if total <= 0 {
+		return fmt.Sprintf("进度 [%s] --%%", bar)
+	}
+	ratio := used / total
+	if ratio < 0 {
+		ratio = 0
+	}
+	if ratio > 1 {
+		ratio = 1
+	}
+	filled := int(math.Round(ratio * float64(trayProgressBarWidth)))
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > trayProgressBarWidth {
+		filled = trayProgressBarWidth
+	}
+	bar = strings.Repeat("#", filled) + strings.Repeat("-", trayProgressBarWidth-filled)
+	percent := int(math.Round(ratio * 100))
+	return fmt.Sprintf("进度 [%s] %d%%", bar, percent)
+}
+
+func formatCurrency(value float64) string {
+	return fmt.Sprintf("$%.2f", value)
 }
 
 // ============================================================

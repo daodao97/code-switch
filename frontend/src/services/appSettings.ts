@@ -3,6 +3,7 @@ import { Call } from '@wailsio/runtime'
 export type AppSettings = {
   show_heatmap: boolean
   show_home_title: boolean
+  budget_total: number
   auto_start: boolean
   auto_update: boolean
   auto_connectivity_test: boolean
@@ -13,6 +14,7 @@ export type AppSettings = {
 const DEFAULT_SETTINGS: AppSettings = {
   show_heatmap: true,
   show_home_title: true,
+  budget_total: 0,
   auto_start: false,
   auto_update: true,
   auto_connectivity_test: false,

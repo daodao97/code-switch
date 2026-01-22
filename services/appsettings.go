@@ -20,6 +20,7 @@ const (
 type AppSettings struct {
 	ShowHeatmap          bool `json:"show_heatmap"`
 	ShowHomeTitle        bool `json:"show_home_title"`
+	BudgetTotal          float64 `json:"budget_total"`
 	AutoStart            bool `json:"auto_start"`
 	AutoUpdate           bool `json:"auto_update"`
 	AutoConnectivityTest bool `json:"auto_connectivity_test"`
@@ -139,6 +140,7 @@ func (as *AppSettingsService) defaultSettings() AppSettings {
 	return AppSettings{
 		ShowHeatmap:          true,
 		ShowHomeTitle:        true,
+		BudgetTotal:          0,
 		AutoStart:            autoStartEnabled,
 		AutoUpdate:           true,  // 默认开启自动更新
 		AutoConnectivityTest: true,  // 默认开启自动可用性监控（开箱即用）

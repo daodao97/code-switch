@@ -22,6 +22,12 @@ const getCachedValue = (key: string, defaultValue: boolean): boolean => {
   const cached = localStorage.getItem(`app-settings-${key}`)
   return cached !== null ? cached === 'true' : defaultValue
 }
+const getCachedNumber = (key: string, defaultValue: number): number => {
+  const cached = localStorage.getItem(`app-settings-${key}`)
+  if (cached === null) return defaultValue
+  const parsed = Number(cached)
+  return Number.isFinite(parsed) ? parsed : defaultValue
+}
 const heatmapEnabled = ref(getCachedValue('heatmap', true))
 const homeTitleVisible = ref(getCachedValue('homeTitle', true))
 const autoStartEnabled = ref(getCachedValue('autoStart', false))
@@ -29,6 +35,7 @@ const autoUpdateEnabled = ref(getCachedValue('autoUpdate', true))
 const autoConnectivityTestEnabled = ref(getCachedValue('autoConnectivityTest', false))
 const switchNotifyEnabled = ref(getCachedValue('switchNotify', true)) // 切换通知开关
 const roundRobinEnabled = ref(getCachedValue('roundRobin', false))    // 同 Level 轮询开关
+const budgetTotal = ref(getCachedNumber('budgetTotal', 0))
 const settingsLoading = ref(true)
 const saveBusy = ref(false)
 
@@ -62,6 +69,7 @@ const loadAppSettings = async () => {
     const data = await fetchAppSettings()
     heatmapEnabled.value = data?.show_heatmap ?? true
     homeTitleVisible.value = data?.show_home_title ?? true
+    budgetTotal.value = Number(data?.budget_total ?? 0)
     autoStartEnabled.value = data?.auto_start ?? false
     autoUpdateEnabled.value = data?.auto_update ?? true
     autoConnectivityTestEnabled.value = data?.auto_connectivity_test ?? false
@@ -71,6 +79,7 @@ const loadAppSettings = async () => {
     // 缓存到 localStorage，下次打开时直接显示正确状态
     localStorage.setItem('app-settings-heatmap', String(heatmapEnabled.value))
     localStorage.setItem('app-settings-homeTitle', String(homeTitleVisible.value))
+    localStorage.setItem('app-settings-budgetTotal', String(budgetTotal.value))
     localStorage.setItem('app-settings-autoStart', String(autoStartEnabled.value))
     localStorage.setItem('app-settings-autoUpdate', String(autoUpdateEnabled.value))
     localStorage.setItem('app-settings-autoConnectivityTest', String(autoConnectivityTestEnabled.value))
@@ -80,6 +89,7 @@ const loadAppSettings = async () => {
     console.error('failed to load app settings', error)
     heatmapEnabled.value = true
     homeTitleVisible.value = true
+    budgetTotal.value = 0
     autoStartEnabled.value = false
     autoUpdateEnabled.value = true
     autoConnectivityTestEnabled.value = false
@@ -94,9 +104,12 @@ const persistAppSettings = async () => {
   if (settingsLoading.value || saveBusy.value) return
   saveBusy.value = true
   try {
+    const normalizedBudgetTotal = Number.isFinite(budgetTotal.value) ? Math.max(0, budgetTotal.value) : 0
+    budgetTotal.value = normalizedBudgetTotal
     const payload: AppSettings = {
       show_heatmap: heatmapEnabled.value,
       show_home_title: homeTitleVisible.value,
+      budget_total: normalizedBudgetTotal,
       auto_start: autoStartEnabled.value,
       auto_update: autoUpdateEnabled.value,
       auto_connectivity_test: autoConnectivityTestEnabled.value,
@@ -117,6 +130,7 @@ const persistAppSettings = async () => {
     // 更新缓存
     localStorage.setItem('app-settings-heatmap', String(heatmapEnabled.value))
     localStorage.setItem('app-settings-homeTitle', String(homeTitleVisible.value))
+    localStorage.setItem('app-settings-budgetTotal', String(budgetTotal.value))
     localStorage.setItem('app-settings-autoStart', String(autoStartEnabled.value))
     localStorage.setItem('app-settings-autoUpdate', String(autoUpdateEnabled.value))
     localStorage.setItem('app-settings-autoConnectivityTest', String(autoConnectivityTestEnabled.value))
@@ -416,6 +430,24 @@ onMounted(async () => {
               <span></span>
             </label>
           </ListItem>
+          <ListItem :label="$t('components.general.label.budgetTotal')">
+            <div class="toggle-with-hint">
+              <div class="budget-input">
+                <input
+                  type="number"
+                  inputmode="decimal"
+                  min="0"
+                  step="0.01"
+                  :disabled="settingsLoading || saveBusy"
+                  v-model.number="budgetTotal"
+                  @change="persistAppSettings"
+                  class="mac-input budget-input-field"
+                />
+                <span class="budget-unit">USD</span>
+              </div>
+              <span class="hint-text">{{ $t('components.general.label.budgetTotalHint') }}</span>
+            </div>
+          </ListItem>
           <ListItem :label="$t('components.general.label.autoStart')">
             <label class="mac-switch">
               <input
@@ -658,6 +690,23 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.mac-input {
+  padding: 6px 12px;
+  border: 1px solid var(--mac-border);
+  border-radius: 6px;
+  background: var(--mac-surface);
+  color: var(--mac-text);
+  font-size: 13px;
+  font-family: monospace;
+  min-width: 160px;
+  transition: border-color 0.2s;
+}
+
+.mac-input:focus {
+  outline: none;
+  border-color: var(--mac-accent);
+}
+
 .toggle-with-hint {
   display: flex;
   flex-direction: column;
@@ -678,6 +727,21 @@ onMounted(async () => {
   color: rgba(255, 255, 255, 0.5);
 }
 
+.budget-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.budget-input-field {
+  width: 140px;
+}
+
+.budget-unit {
+  font-size: 12px;
+  color: var(--mac-text-secondary);
+}
+
 .import-path-input {
   width: 280px;
   font-size: 12px;
@@ -689,5 +753,9 @@ onMounted(async () => {
 
 :global(.dark) .info-text.warning {
   color: #f39c12;
+}
+
+:global(.dark) .mac-input {
+  background: var(--mac-surface-strong);
 }
 </style>
