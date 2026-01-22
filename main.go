@@ -33,11 +33,25 @@ var assets embed.FS
 var trayIcons embed.FS
 
 type AppService struct {
-	App *application.App
+	App        *application.App
+	TrayWindow application.Window
 }
 
 func (a *AppService) SetApp(app *application.App) {
 	a.App = app
+}
+
+func (a *AppService) SetTrayWindowHeight(height int) {
+	if runtime.GOOS != "darwin" || a.TrayWindow == nil {
+		return
+	}
+	if height < trayWindowMinHeight {
+		height = trayWindowMinHeight
+	}
+	if height > trayWindowMaxHeight {
+		height = trayWindowMaxHeight
+	}
+	a.TrayWindow.SetSize(trayWindowWidth, height)
 }
 
 func (a *AppService) OpenSecondWindow() {
@@ -345,6 +359,38 @@ func main() {
 		showMainWindow(true)
 	})
 
+	var trayWindow application.Window
+	if runtime.GOOS == "darwin" {
+		trayWindow = app.Window.NewWithOptions(application.WebviewWindowOptions{
+			Title:       "Code Switch Tray",
+			Name:        "tray",
+			Width:       trayWindowWidth,
+			Height:      trayWindowMinHeight,
+			MinWidth:    trayWindowWidth,
+			MaxWidth:    trayWindowWidth,
+			MinHeight:   trayWindowMinHeight,
+			MaxHeight:   trayWindowMaxHeight,
+			AlwaysOnTop: true,
+			DisableResize: true,
+			Frameless:     true,
+			Hidden:        true,
+			BackgroundType: application.BackgroundTypeTransparent,
+			BackgroundColour: application.NewRGBA(0, 0, 0, 0),
+			Mac: application.MacWindow{
+				Backdrop:     application.MacBackdropTransparent,
+				TitleBar:     application.MacTitleBarHidden,
+				DisableShadow: true,
+				WindowLevel:  application.MacWindowLevelPopUpMenu,
+			},
+			URL: "/#/tray",
+		})
+		trayWindow.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+			trayWindow.Hide()
+			e.Cancel()
+		})
+		appservice.TrayWindow = trayWindow
+	}
+
 	systray := app.SystemTray.New()
 	// systray.SetLabel("AI Code Studio")
 	systray.SetTooltip("AI Code Studio")
@@ -355,24 +401,44 @@ func main() {
 		systray.SetDarkModeIcon(darkIcon)
 	}
 
-	refreshTrayMenu := func() {
-		used, total := getTrayUsage(logService, appSettings)
-		trayMenu := buildUsageTrayMenu(used, total, func() {
+	if runtime.GOOS == "darwin" && trayWindow != nil {
+		trayMenu := application.NewMenu()
+		trayMenu.Add("显示主窗口").OnClick(func(ctx *application.Context) {
 			showMainWindow(true)
-		}, func() {
+		})
+		trayMenu.Add("退出").OnClick(func(ctx *application.Context) {
 			app.Quit()
 		})
 		systray.SetMenu(trayMenu)
+		systray.AttachWindow(trayWindow).WindowOffset(8)
+		systray.OnRightClick(func() {
+			systray.OpenMenu()
+		})
+	} else {
+		refreshTrayMenu := func() {
+			used, total := getTrayUsage(logService, appSettings)
+			trayMenu := buildUsageTrayMenu(used, total, func() {
+				showMainWindow(true)
+			}, func() {
+				app.Quit()
+			})
+			systray.SetMenu(trayMenu)
+		}
+		refreshTrayMenu()
+		systray.OnRightClick(func() {
+			refreshTrayMenu()
+			systray.OpenMenu()
+		})
+		systray.OnClick(func() {
+			if !mainWindow.IsVisible() {
+				showMainWindow(true)
+				return
+			}
+			if !mainWindow.IsFocused() {
+				focusMainWindow()
+			}
+		})
 	}
-	refreshTrayMenu()
-	systray.OnClick(func() {
-		refreshTrayMenu()
-		systray.OpenMenu()
-	})
-	systray.OnRightClick(func() {
-		refreshTrayMenu()
-		systray.OpenMenu()
-	})
 
 	appservice.SetApp(app)
 
@@ -415,7 +481,12 @@ func handleDockVisibility(service *dock.DockService, show bool) {
 	}
 }
 
-const trayProgressBarWidth = 28
+const (
+	trayWindowWidth     = 360
+	trayWindowMinHeight = 120
+	trayWindowMaxHeight = 420
+	trayProgressBarWidth = 28
+)
 
 func getTrayUsage(logService *services.LogService, appSettings *services.AppSettingsService) (float64, float64) {
 	used := 0.0

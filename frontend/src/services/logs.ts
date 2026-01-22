@@ -73,6 +73,10 @@ export const fetchLogStats = async (platform: LogPlatform | '' = ''): Promise<Lo
   return Call.ByName('codeswitch/services.LogService.StatsSince', platform)
 }
 
+export const fetchCostSince = async (start: string, platform: LogPlatform | '' = ''): Promise<number> => {
+  return Call.ByName('codeswitch/services.LogService.CostSince', start, platform)
+}
+
 export type ProviderDailyStat = {
   provider: string
   total_requests: number

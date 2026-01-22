@@ -2,6 +2,7 @@ package services
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"sort"
 	"strings"
@@ -16,6 +17,48 @@ const timeLayout = "2006-01-02 15:04:05"
 
 type LogService struct {
 	pricing *modelpricing.Service
+}
+
+func (ls *LogService) CostSince(start string, platform string) (float64, error) {
+	startTime, err := parseTimeInput(start)
+	if err != nil {
+		return 0, err
+	}
+	model := xdb.New("request_log")
+	options := []xdb.Option{
+		xdb.WhereGte("created_at", startTime.Format(timeLayout)),
+		xdb.Field(
+			"model",
+			"input_tokens",
+			"output_tokens",
+			"reasoning_tokens",
+			"cache_create_tokens",
+			"cache_read_tokens",
+		),
+	}
+	if platform != "" {
+		options = append(options, xdb.WhereEq("platform", platform))
+	}
+	records, err := model.Selects(options...)
+	if err != nil {
+		if errors.Is(err, xdb.ErrNotFound) || isNoSuchTableErr(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	total := 0.0
+	for _, record := range records {
+		usage := modelpricing.UsageSnapshot{
+			InputTokens:       record.GetInt("input_tokens"),
+			OutputTokens:      record.GetInt("output_tokens"),
+			ReasoningTokens:   record.GetInt("reasoning_tokens"),
+			CacheCreateTokens: record.GetInt("cache_create_tokens"),
+			CacheReadTokens:   record.GetInt("cache_read_tokens"),
+		}
+		cost := ls.calculateCost(record.GetString("model"), usage)
+		total += cost.TotalCost
+	}
+	return total, nil
 }
 
 func NewLogService() *LogService {
@@ -465,6 +508,41 @@ func parseCreatedAt(record xdb.Record) (time.Time, bool) {
 	}
 
 	return time.Time{}, false
+}
+
+func parseTimeInput(value string) (time.Time, error) {
+	raw := strings.TrimSpace(value)
+	if raw == "" {
+		return startOfDay(time.Now()), nil
+	}
+	layouts := []string{
+		time.RFC3339,
+		timeLayout,
+		"2006-01-02T15:04:05",
+		"2006-01-02 15:04:05 -0700",
+		"2006-01-02 15:04:05 -0700 MST",
+		"2006-01-02 15:04:05 MST",
+		"2006-01-02T15:04:05-0700",
+	}
+	for _, layout := range layouts {
+		if parsed, err := time.Parse(layout, raw); err == nil {
+			return parsed.In(time.Local), nil
+		}
+		if parsed, err := time.ParseInLocation(layout, raw, time.Local); err == nil {
+			return parsed.In(time.Local), nil
+		}
+	}
+	if normalized := strings.Replace(raw, " ", "T", 1); normalized != raw {
+		if parsed, err := time.Parse(time.RFC3339, normalized); err == nil {
+			return parsed.In(time.Local), nil
+		}
+	}
+	if len(raw) >= len("2006-01-02") {
+		if parsed, err := time.ParseInLocation("2006-01-02", raw[:10], time.Local); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("invalid time format: %s", raw)
 }
 
 func dayFromTimestamp(value string) string {

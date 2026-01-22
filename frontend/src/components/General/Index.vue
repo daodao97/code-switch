@@ -28,6 +28,10 @@ const getCachedNumber = (key: string, defaultValue: number): number => {
   const parsed = Number(cached)
   return Number.isFinite(parsed) ? parsed : defaultValue
 }
+const getCachedString = (key: string, defaultValue: string): string => {
+  const cached = localStorage.getItem(`app-settings-${key}`)
+  return cached !== null ? cached : defaultValue
+}
 const heatmapEnabled = ref(getCachedValue('heatmap', true))
 const homeTitleVisible = ref(getCachedValue('homeTitle', true))
 const autoStartEnabled = ref(getCachedValue('autoStart', false))
@@ -36,6 +40,12 @@ const autoConnectivityTestEnabled = ref(getCachedValue('autoConnectivityTest', f
 const switchNotifyEnabled = ref(getCachedValue('switchNotify', true)) // 切换通知开关
 const roundRobinEnabled = ref(getCachedValue('roundRobin', false))    // 同 Level 轮询开关
 const budgetTotal = ref(getCachedNumber('budgetTotal', 0))
+const budgetCycleEnabled = ref(getCachedValue('budgetCycleEnabled', false))
+const budgetCycleMode = ref(getCachedString('budgetCycleMode', 'daily'))
+const budgetRefreshTime = ref(getCachedString('budgetRefreshTime', '00:00'))
+const budgetRefreshDay = ref(getCachedNumber('budgetRefreshDay', 1))
+const budgetShowCountdown = ref(getCachedValue('budgetShowCountdown', false))
+const budgetShowForecast = ref(getCachedValue('budgetShowForecast', false))
 const settingsLoading = ref(true)
 const saveBusy = ref(false)
 
@@ -70,6 +80,12 @@ const loadAppSettings = async () => {
     heatmapEnabled.value = data?.show_heatmap ?? true
     homeTitleVisible.value = data?.show_home_title ?? true
     budgetTotal.value = Number(data?.budget_total ?? 0)
+    budgetCycleEnabled.value = data?.budget_cycle_enabled ?? false
+    budgetCycleMode.value = data?.budget_cycle_mode === 'weekly' ? 'weekly' : 'daily'
+    budgetRefreshTime.value = data?.budget_refresh_time || '00:00'
+    budgetRefreshDay.value = Number.isFinite(data?.budget_refresh_day) ? data?.budget_refresh_day : 1
+    budgetShowCountdown.value = data?.budget_show_countdown ?? false
+    budgetShowForecast.value = data?.budget_show_forecast ?? false
     autoStartEnabled.value = data?.auto_start ?? false
     autoUpdateEnabled.value = data?.auto_update ?? true
     autoConnectivityTestEnabled.value = data?.auto_connectivity_test ?? false
@@ -80,6 +96,12 @@ const loadAppSettings = async () => {
     localStorage.setItem('app-settings-heatmap', String(heatmapEnabled.value))
     localStorage.setItem('app-settings-homeTitle', String(homeTitleVisible.value))
     localStorage.setItem('app-settings-budgetTotal', String(budgetTotal.value))
+    localStorage.setItem('app-settings-budgetCycleEnabled', String(budgetCycleEnabled.value))
+    localStorage.setItem('app-settings-budgetCycleMode', budgetCycleMode.value)
+    localStorage.setItem('app-settings-budgetRefreshTime', budgetRefreshTime.value)
+    localStorage.setItem('app-settings-budgetRefreshDay', String(budgetRefreshDay.value))
+    localStorage.setItem('app-settings-budgetShowCountdown', String(budgetShowCountdown.value))
+    localStorage.setItem('app-settings-budgetShowForecast', String(budgetShowForecast.value))
     localStorage.setItem('app-settings-autoStart', String(autoStartEnabled.value))
     localStorage.setItem('app-settings-autoUpdate', String(autoUpdateEnabled.value))
     localStorage.setItem('app-settings-autoConnectivityTest', String(autoConnectivityTestEnabled.value))
@@ -90,6 +112,12 @@ const loadAppSettings = async () => {
     heatmapEnabled.value = true
     homeTitleVisible.value = true
     budgetTotal.value = 0
+    budgetCycleEnabled.value = false
+    budgetCycleMode.value = 'daily'
+    budgetRefreshTime.value = '00:00'
+    budgetRefreshDay.value = 1
+    budgetShowCountdown.value = false
+    budgetShowForecast.value = false
     autoStartEnabled.value = false
     autoUpdateEnabled.value = true
     autoConnectivityTestEnabled.value = false
@@ -106,10 +134,22 @@ const persistAppSettings = async () => {
   try {
     const normalizedBudgetTotal = Number.isFinite(budgetTotal.value) ? Math.max(0, budgetTotal.value) : 0
     budgetTotal.value = normalizedBudgetTotal
+    const normalizedBudgetRefreshDay = Number.isFinite(budgetRefreshDay.value)
+      ? Math.min(Math.max(Math.floor(budgetRefreshDay.value), 0), 6)
+      : 1
+    budgetRefreshDay.value = normalizedBudgetRefreshDay
+    const normalizedBudgetCycleMode = budgetCycleMode.value === 'weekly' ? 'weekly' : 'daily'
+    budgetCycleMode.value = normalizedBudgetCycleMode
     const payload: AppSettings = {
       show_heatmap: heatmapEnabled.value,
       show_home_title: homeTitleVisible.value,
       budget_total: normalizedBudgetTotal,
+      budget_cycle_enabled: budgetCycleEnabled.value,
+      budget_cycle_mode: normalizedBudgetCycleMode,
+      budget_refresh_time: budgetRefreshTime.value || '00:00',
+      budget_refresh_day: normalizedBudgetRefreshDay,
+      budget_show_countdown: budgetShowCountdown.value,
+      budget_show_forecast: budgetShowForecast.value,
       auto_start: autoStartEnabled.value,
       auto_update: autoUpdateEnabled.value,
       auto_connectivity_test: autoConnectivityTestEnabled.value,
@@ -131,6 +171,12 @@ const persistAppSettings = async () => {
     localStorage.setItem('app-settings-heatmap', String(heatmapEnabled.value))
     localStorage.setItem('app-settings-homeTitle', String(homeTitleVisible.value))
     localStorage.setItem('app-settings-budgetTotal', String(budgetTotal.value))
+    localStorage.setItem('app-settings-budgetCycleEnabled', String(budgetCycleEnabled.value))
+    localStorage.setItem('app-settings-budgetCycleMode', budgetCycleMode.value)
+    localStorage.setItem('app-settings-budgetRefreshTime', budgetRefreshTime.value)
+    localStorage.setItem('app-settings-budgetRefreshDay', String(budgetRefreshDay.value))
+    localStorage.setItem('app-settings-budgetShowCountdown', String(budgetShowCountdown.value))
+    localStorage.setItem('app-settings-budgetShowForecast', String(budgetShowForecast.value))
     localStorage.setItem('app-settings-autoStart', String(autoStartEnabled.value))
     localStorage.setItem('app-settings-autoUpdate', String(autoUpdateEnabled.value))
     localStorage.setItem('app-settings-autoConnectivityTest', String(autoConnectivityTestEnabled.value))
@@ -430,24 +476,6 @@ onMounted(async () => {
               <span></span>
             </label>
           </ListItem>
-          <ListItem :label="$t('components.general.label.budgetTotal')">
-            <div class="toggle-with-hint">
-              <div class="budget-input">
-                <input
-                  type="number"
-                  inputmode="decimal"
-                  min="0"
-                  step="0.01"
-                  :disabled="settingsLoading || saveBusy"
-                  v-model.number="budgetTotal"
-                  @change="persistAppSettings"
-                  class="mac-input budget-input-field"
-                />
-                <span class="budget-unit">USD</span>
-              </div>
-              <span class="hint-text">{{ $t('components.general.label.budgetTotalHint') }}</span>
-            </div>
-          </ListItem>
           <ListItem :label="$t('components.general.label.autoStart')">
             <label class="mac-switch">
               <input
@@ -486,6 +514,99 @@ onMounted(async () => {
               </label>
               <span class="hint-text">{{ $t('components.general.label.roundRobinHint') }}</span>
             </div>
+          </ListItem>
+        </div>
+        <div class="mac-panel">
+          <div class="panel-title">{{ $t('components.general.title.trayPanel') }}</div>
+          <ListItem :label="$t('components.general.label.budgetTotal')">
+            <div class="toggle-with-hint">
+              <div class="budget-input">
+                <input
+                  type="number"
+                  inputmode="decimal"
+                  min="0"
+                  step="0.01"
+                  :disabled="settingsLoading || saveBusy"
+                  v-model.number="budgetTotal"
+                  @change="persistAppSettings"
+                  class="mac-input budget-input-field"
+                />
+                <span class="budget-unit">USD</span>
+              </div>
+              <span class="hint-text">{{ $t('components.general.label.budgetTotalHint') }}</span>
+            </div>
+          </ListItem>
+          <ListItem :label="$t('components.general.label.budgetCycle')">
+            <div class="toggle-with-hint">
+              <label class="mac-switch">
+                <input
+                  type="checkbox"
+                  :disabled="settingsLoading || saveBusy"
+                  v-model="budgetCycleEnabled"
+                  @change="persistAppSettings"
+                />
+                <span></span>
+              </label>
+              <span class="hint-text">{{ $t('components.general.label.budgetCycleHint') }}</span>
+            </div>
+          </ListItem>
+          <ListItem :label="$t('components.general.label.budgetCycleMode')">
+            <select
+              v-model="budgetCycleMode"
+              :disabled="settingsLoading || saveBusy || !budgetCycleEnabled"
+              class="mac-select budget-select"
+              @change="persistAppSettings">
+              <option value="daily">{{ $t('components.general.label.budgetCycleModeDaily') }}</option>
+              <option value="weekly">{{ $t('components.general.label.budgetCycleModeWeekly') }}</option>
+            </select>
+          </ListItem>
+          <ListItem
+            v-if="budgetCycleMode === 'weekly'"
+            :label="$t('components.general.label.budgetRefreshDay')">
+            <select
+              v-model.number="budgetRefreshDay"
+              :disabled="settingsLoading || saveBusy || !budgetCycleEnabled"
+              class="mac-select budget-select"
+              @change="persistAppSettings">
+              <option :value="1">{{ $t('components.general.label.weekdayMon') }}</option>
+              <option :value="2">{{ $t('components.general.label.weekdayTue') }}</option>
+              <option :value="3">{{ $t('components.general.label.weekdayWed') }}</option>
+              <option :value="4">{{ $t('components.general.label.weekdayThu') }}</option>
+              <option :value="5">{{ $t('components.general.label.weekdayFri') }}</option>
+              <option :value="6">{{ $t('components.general.label.weekdaySat') }}</option>
+              <option :value="0">{{ $t('components.general.label.weekdaySun') }}</option>
+            </select>
+          </ListItem>
+          <ListItem :label="$t('components.general.label.budgetRefreshTime')">
+            <input
+              type="time"
+              :disabled="settingsLoading || saveBusy || !budgetCycleEnabled"
+              v-model="budgetRefreshTime"
+              @change="persistAppSettings"
+              class="mac-input budget-time-input"
+            />
+          </ListItem>
+          <ListItem :label="$t('components.general.label.budgetShowCountdown')">
+            <label class="mac-switch">
+              <input
+                type="checkbox"
+                :disabled="settingsLoading || saveBusy"
+                v-model="budgetShowCountdown"
+                @change="persistAppSettings"
+              />
+              <span></span>
+            </label>
+          </ListItem>
+          <ListItem :label="$t('components.general.label.budgetShowForecast')">
+            <label class="mac-switch">
+              <input
+                type="checkbox"
+                :disabled="settingsLoading || saveBusy"
+                v-model="budgetShowForecast"
+                @change="persistAppSettings"
+              />
+              <span></span>
+            </label>
           </ListItem>
         </div>
       </section>
@@ -707,6 +828,13 @@ onMounted(async () => {
   border-color: var(--mac-accent);
 }
 
+.panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mac-text-secondary);
+  margin-bottom: 8px;
+}
+
 .toggle-with-hint {
   display: flex;
   flex-direction: column;
@@ -735,6 +863,14 @@ onMounted(async () => {
 
 .budget-input-field {
   width: 140px;
+}
+
+.budget-time-input {
+  width: 140px;
+}
+
+.budget-select {
+  width: 160px;
 }
 
 .budget-unit {
