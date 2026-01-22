@@ -43,10 +43,12 @@ const progressPercentLabel = computed(() => {
   const percent = Math.round(progressRatio.value * 100)
   return `${percent}%`
 })
+const budgetTitle = computed(() => (cycleEnabled.value && cycleMode.value === 'weekly' ? '本周预算' : '今日预算'))
+
+const pad2 = (value: number) => String(value).padStart(2, '0')
 
 const formatLocalDateTime = (date: Date) => {
-  const pad = (value: number) => String(value).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`
 }
 
 const startOfDay = (date: Date) => {
@@ -112,10 +114,11 @@ const updateCycleTimes = () => {
 
 const formatCountdown = (remainingMs: number) => {
   const totalSeconds = Math.max(Math.floor(remainingMs / 1000), 0)
-  const hours = Math.floor(totalSeconds / 3600)
+  const days = Math.floor(totalSeconds / 86400)
+  const hours = Math.floor((totalSeconds % 86400) / 3600)
   const minutes = Math.floor((totalSeconds % 3600) / 60)
   const seconds = totalSeconds % 60
-  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+  return `${pad2(days)}天 ${pad2(hours)}:${pad2(minutes)}:${pad2(seconds)}`
 }
 
 const updateDerivedLabels = () => {
@@ -139,7 +142,7 @@ const updateDerivedLabels = () => {
     if (rate > 0 && used.value < total.value) {
       const secondsToBudget = (total.value - used.value) / rate
       const forecastTime = new Date(now.getTime() + secondsToBudget * 1000)
-      forecastLabel.value = `预计耗尽 ${forecastTime.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`
+      forecastLabel.value = `预计耗尽 ${formatLocalDateTime(forecastTime)}`
     } else if (used.value >= total.value && total.value > 0) {
       forecastLabel.value = '已达预算'
     } else {
@@ -229,7 +232,7 @@ onUnmounted(() => {
         <div class="tray-item__header">
           <div class="tray-item__title">
             <span class="tray-dot"></span>
-            <span>今日预算</span>
+            <span>{{ budgetTitle }}</span>
           </div>
           <div class="tray-item__summary">
             <div class="tray-item__value" :class="{ loading }">
