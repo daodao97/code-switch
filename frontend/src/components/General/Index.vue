@@ -48,6 +48,15 @@ const budgetRefreshTime = ref(getCachedString('budgetRefreshTime', '00:00'))
 const budgetRefreshDay = ref(getCachedNumber('budgetRefreshDay', 1))
 const budgetShowCountdown = ref(getCachedValue('budgetShowCountdown', false))
 const budgetShowForecast = ref(getCachedValue('budgetShowForecast', false))
+const budgetTotalCodex = ref(getCachedNumber('budgetTotalCodex', 0))
+const budgetUsedAdjustmentCodex = ref(getCachedNumber('budgetUsedAdjustmentCodex', 0))
+const budgetForecastMethodCodex = ref(getCachedString('budgetForecastMethodCodex', 'cycle'))
+const budgetCycleEnabledCodex = ref(getCachedValue('budgetCycleEnabledCodex', false))
+const budgetCycleModeCodex = ref(getCachedString('budgetCycleModeCodex', 'daily'))
+const budgetRefreshTimeCodex = ref(getCachedString('budgetRefreshTimeCodex', '00:00'))
+const budgetRefreshDayCodex = ref(getCachedNumber('budgetRefreshDayCodex', 1))
+const budgetShowCountdownCodex = ref(getCachedValue('budgetShowCountdownCodex', false))
+const budgetShowForecastCodex = ref(getCachedValue('budgetShowForecastCodex', false))
 const settingsLoading = ref(true)
 const saveBusy = ref(false)
 
@@ -98,6 +107,15 @@ const loadAppSettings = async () => {
     budgetRefreshDay.value = Number.isFinite(data?.budget_refresh_day) ? data?.budget_refresh_day : 1
     budgetShowCountdown.value = data?.budget_show_countdown ?? false
     budgetShowForecast.value = data?.budget_show_forecast ?? false
+    budgetTotalCodex.value = Number(data?.budget_total_codex ?? 0)
+    budgetUsedAdjustmentCodex.value = Number(data?.budget_used_adjustment_codex ?? 0)
+    budgetForecastMethodCodex.value = normalizeBudgetForecastMethod(data?.budget_forecast_method_codex ?? 'cycle')
+    budgetCycleEnabledCodex.value = data?.budget_cycle_enabled_codex ?? false
+    budgetCycleModeCodex.value = data?.budget_cycle_mode_codex === 'weekly' ? 'weekly' : 'daily'
+    budgetRefreshTimeCodex.value = data?.budget_refresh_time_codex || '00:00'
+    budgetRefreshDayCodex.value = Number.isFinite(data?.budget_refresh_day_codex) ? data?.budget_refresh_day_codex : 1
+    budgetShowCountdownCodex.value = data?.budget_show_countdown_codex ?? false
+    budgetShowForecastCodex.value = data?.budget_show_forecast_codex ?? false
     autoStartEnabled.value = data?.auto_start ?? false
     autoUpdateEnabled.value = data?.auto_update ?? true
     autoConnectivityTestEnabled.value = data?.auto_connectivity_test ?? false
@@ -116,6 +134,15 @@ const loadAppSettings = async () => {
     localStorage.setItem('app-settings-budgetRefreshDay', String(budgetRefreshDay.value))
     localStorage.setItem('app-settings-budgetShowCountdown', String(budgetShowCountdown.value))
     localStorage.setItem('app-settings-budgetShowForecast', String(budgetShowForecast.value))
+    localStorage.setItem('app-settings-budgetTotalCodex', String(budgetTotalCodex.value))
+    localStorage.setItem('app-settings-budgetUsedAdjustmentCodex', String(budgetUsedAdjustmentCodex.value))
+    localStorage.setItem('app-settings-budgetForecastMethodCodex', budgetForecastMethodCodex.value)
+    localStorage.setItem('app-settings-budgetCycleEnabledCodex', String(budgetCycleEnabledCodex.value))
+    localStorage.setItem('app-settings-budgetCycleModeCodex', budgetCycleModeCodex.value)
+    localStorage.setItem('app-settings-budgetRefreshTimeCodex', budgetRefreshTimeCodex.value)
+    localStorage.setItem('app-settings-budgetRefreshDayCodex', String(budgetRefreshDayCodex.value))
+    localStorage.setItem('app-settings-budgetShowCountdownCodex', String(budgetShowCountdownCodex.value))
+    localStorage.setItem('app-settings-budgetShowForecastCodex', String(budgetShowForecastCodex.value))
     localStorage.setItem('app-settings-autoStart', String(autoStartEnabled.value))
     localStorage.setItem('app-settings-autoUpdate', String(autoUpdateEnabled.value))
     localStorage.setItem('app-settings-autoConnectivityTest', String(autoConnectivityTestEnabled.value))
@@ -134,6 +161,15 @@ const loadAppSettings = async () => {
     budgetRefreshDay.value = 1
     budgetShowCountdown.value = false
     budgetShowForecast.value = false
+    budgetTotalCodex.value = 0
+    budgetUsedAdjustmentCodex.value = 0
+    budgetForecastMethodCodex.value = 'cycle'
+    budgetCycleEnabledCodex.value = false
+    budgetCycleModeCodex.value = 'daily'
+    budgetRefreshTimeCodex.value = '00:00'
+    budgetRefreshDayCodex.value = 1
+    budgetShowCountdownCodex.value = false
+    budgetShowForecastCodex.value = false
     autoStartEnabled.value = false
     autoUpdateEnabled.value = true
     autoConnectivityTestEnabled.value = false
@@ -156,12 +192,28 @@ const persistAppSettings = async () => {
     budgetUsedAdjustment.value = normalizedBudgetUsedAdjustment
     const normalizedBudgetForecastMethod = normalizeBudgetForecastMethod(budgetForecastMethod.value)
     budgetForecastMethod.value = normalizedBudgetForecastMethod
+    const normalizedBudgetTotalCodex = Number.isFinite(budgetTotalCodex.value)
+      ? Math.max(0, budgetTotalCodex.value)
+      : 0
+    budgetTotalCodex.value = normalizedBudgetTotalCodex
+    const normalizedBudgetUsedAdjustmentCodex = Number.isFinite(budgetUsedAdjustmentCodex.value)
+      ? budgetUsedAdjustmentCodex.value
+      : 0
+    budgetUsedAdjustmentCodex.value = normalizedBudgetUsedAdjustmentCodex
+    const normalizedBudgetForecastMethodCodex = normalizeBudgetForecastMethod(budgetForecastMethodCodex.value)
+    budgetForecastMethodCodex.value = normalizedBudgetForecastMethodCodex
     const normalizedBudgetRefreshDay = Number.isFinite(budgetRefreshDay.value)
       ? Math.min(Math.max(Math.floor(budgetRefreshDay.value), 0), 6)
       : 1
     budgetRefreshDay.value = normalizedBudgetRefreshDay
     const normalizedBudgetCycleMode = budgetCycleMode.value === 'weekly' ? 'weekly' : 'daily'
     budgetCycleMode.value = normalizedBudgetCycleMode
+    const normalizedBudgetRefreshDayCodex = Number.isFinite(budgetRefreshDayCodex.value)
+      ? Math.min(Math.max(Math.floor(budgetRefreshDayCodex.value), 0), 6)
+      : 1
+    budgetRefreshDayCodex.value = normalizedBudgetRefreshDayCodex
+    const normalizedBudgetCycleModeCodex = budgetCycleModeCodex.value === 'weekly' ? 'weekly' : 'daily'
+    budgetCycleModeCodex.value = normalizedBudgetCycleModeCodex
     const payload: AppSettings = {
       show_heatmap: heatmapEnabled.value,
       show_home_title: homeTitleVisible.value,
@@ -174,6 +226,15 @@ const persistAppSettings = async () => {
       budget_refresh_day: normalizedBudgetRefreshDay,
       budget_show_countdown: budgetShowCountdown.value,
       budget_show_forecast: budgetShowForecast.value,
+      budget_total_codex: normalizedBudgetTotalCodex,
+      budget_used_adjustment_codex: normalizedBudgetUsedAdjustmentCodex,
+      budget_forecast_method_codex: normalizedBudgetForecastMethodCodex,
+      budget_cycle_enabled_codex: budgetCycleEnabledCodex.value,
+      budget_cycle_mode_codex: normalizedBudgetCycleModeCodex,
+      budget_refresh_time_codex: budgetRefreshTimeCodex.value || '00:00',
+      budget_refresh_day_codex: normalizedBudgetRefreshDayCodex,
+      budget_show_countdown_codex: budgetShowCountdownCodex.value,
+      budget_show_forecast_codex: budgetShowForecastCodex.value,
       auto_start: autoStartEnabled.value,
       auto_update: autoUpdateEnabled.value,
       auto_connectivity_test: autoConnectivityTestEnabled.value,
@@ -203,6 +264,15 @@ const persistAppSettings = async () => {
     localStorage.setItem('app-settings-budgetRefreshDay', String(budgetRefreshDay.value))
     localStorage.setItem('app-settings-budgetShowCountdown', String(budgetShowCountdown.value))
     localStorage.setItem('app-settings-budgetShowForecast', String(budgetShowForecast.value))
+    localStorage.setItem('app-settings-budgetTotalCodex', String(budgetTotalCodex.value))
+    localStorage.setItem('app-settings-budgetUsedAdjustmentCodex', String(budgetUsedAdjustmentCodex.value))
+    localStorage.setItem('app-settings-budgetForecastMethodCodex', budgetForecastMethodCodex.value)
+    localStorage.setItem('app-settings-budgetCycleEnabledCodex', String(budgetCycleEnabledCodex.value))
+    localStorage.setItem('app-settings-budgetCycleModeCodex', budgetCycleModeCodex.value)
+    localStorage.setItem('app-settings-budgetRefreshTimeCodex', budgetRefreshTimeCodex.value)
+    localStorage.setItem('app-settings-budgetRefreshDayCodex', String(budgetRefreshDayCodex.value))
+    localStorage.setItem('app-settings-budgetShowCountdownCodex', String(budgetShowCountdownCodex.value))
+    localStorage.setItem('app-settings-budgetShowForecastCodex', String(budgetShowForecastCodex.value))
     localStorage.setItem('app-settings-autoStart', String(autoStartEnabled.value))
     localStorage.setItem('app-settings-autoUpdate', String(autoUpdateEnabled.value))
     localStorage.setItem('app-settings-autoConnectivityTest', String(autoConnectivityTestEnabled.value))
@@ -547,6 +617,7 @@ onMounted(async () => {
       <section>
         <h2 class="mac-section-title">{{ $t('components.general.title.trayPanel') }}</h2>
         <div class="mac-panel">
+          <p class="panel-title">{{ $t('components.general.label.trayPanelClaude') }}</p>
           <ListItem :label="$t('components.general.label.budgetTotal')">
             <div class="toggle-with-hint">
               <div class="budget-input">
@@ -659,6 +730,132 @@ onMounted(async () => {
               <select
                 v-model="budgetForecastMethod"
                 :disabled="settingsLoading || saveBusy || !budgetShowForecast"
+                class="mac-select budget-select"
+                @change="persistAppSettings">
+                <option value="cycle">{{ $t('components.general.label.budgetForecastMethodCycle') }}</option>
+                <option value="10m">{{ $t('components.general.label.budgetForecastMethod10m') }}</option>
+                <option value="1h">{{ $t('components.general.label.budgetForecastMethod1h') }}</option>
+                <option value="yesterday">{{ $t('components.general.label.budgetForecastMethodYesterday') }}</option>
+                <option value="last24h">{{ $t('components.general.label.budgetForecastMethod24h') }}</option>
+              </select>
+              <span class="hint-text">{{ $t('components.general.label.budgetForecastMethodHint') }}</span>
+            </div>
+          </ListItem>
+        </div>
+        <div class="mac-panel">
+          <p class="panel-title">{{ $t('components.general.label.trayPanelCodex') }}</p>
+          <ListItem :label="$t('components.general.label.budgetTotal')">
+            <div class="toggle-with-hint">
+              <div class="budget-input">
+                <input
+                  type="number"
+                  inputmode="decimal"
+                  min="0"
+                  step="0.01"
+                  :disabled="settingsLoading || saveBusy"
+                  v-model.number="budgetTotalCodex"
+                  @change="persistAppSettings"
+                  class="mac-input budget-input-field"
+                />
+                <span class="budget-unit">USD</span>
+              </div>
+              <span class="hint-text">{{ $t('components.general.label.budgetTotalHint') }}</span>
+            </div>
+          </ListItem>
+          <ListItem :label="$t('components.general.label.budgetUsedAdjustment')">
+            <div class="toggle-with-hint">
+              <div class="budget-input">
+                <input
+                  type="number"
+                  inputmode="decimal"
+                  step="0.01"
+                  :disabled="settingsLoading || saveBusy"
+                  v-model.number="budgetUsedAdjustmentCodex"
+                  @change="persistAppSettings"
+                  class="mac-input budget-input-field"
+                />
+                <span class="budget-unit">USD</span>
+              </div>
+              <span class="hint-text">{{ $t('components.general.label.budgetUsedAdjustmentHint') }}</span>
+            </div>
+          </ListItem>
+          <ListItem :label="$t('components.general.label.budgetCycle')">
+            <div class="toggle-with-hint">
+              <label class="mac-switch">
+                <input
+                  type="checkbox"
+                  :disabled="settingsLoading || saveBusy"
+                  v-model="budgetCycleEnabledCodex"
+                  @change="persistAppSettings"
+                />
+                <span></span>
+              </label>
+              <span class="hint-text">{{ $t('components.general.label.budgetCycleHint') }}</span>
+            </div>
+          </ListItem>
+          <ListItem :label="$t('components.general.label.budgetCycleMode')">
+            <select
+              v-model="budgetCycleModeCodex"
+              :disabled="settingsLoading || saveBusy || !budgetCycleEnabledCodex"
+              class="mac-select budget-select"
+              @change="persistAppSettings">
+              <option value="daily">{{ $t('components.general.label.budgetCycleModeDaily') }}</option>
+              <option value="weekly">{{ $t('components.general.label.budgetCycleModeWeekly') }}</option>
+            </select>
+          </ListItem>
+          <ListItem
+            v-if="budgetCycleModeCodex === 'weekly'"
+            :label="$t('components.general.label.budgetRefreshDay')">
+            <select
+              v-model.number="budgetRefreshDayCodex"
+              :disabled="settingsLoading || saveBusy || !budgetCycleEnabledCodex"
+              class="mac-select budget-select"
+              @change="persistAppSettings">
+              <option :value="1">{{ $t('components.general.label.weekdayMon') }}</option>
+              <option :value="2">{{ $t('components.general.label.weekdayTue') }}</option>
+              <option :value="3">{{ $t('components.general.label.weekdayWed') }}</option>
+              <option :value="4">{{ $t('components.general.label.weekdayThu') }}</option>
+              <option :value="5">{{ $t('components.general.label.weekdayFri') }}</option>
+              <option :value="6">{{ $t('components.general.label.weekdaySat') }}</option>
+              <option :value="0">{{ $t('components.general.label.weekdaySun') }}</option>
+            </select>
+          </ListItem>
+          <ListItem :label="$t('components.general.label.budgetRefreshTime')">
+            <input
+              type="time"
+              :disabled="settingsLoading || saveBusy || !budgetCycleEnabledCodex"
+              v-model="budgetRefreshTimeCodex"
+              @change="persistAppSettings"
+              class="mac-input budget-time-input"
+            />
+          </ListItem>
+          <ListItem :label="$t('components.general.label.budgetShowCountdown')">
+            <label class="mac-switch">
+              <input
+                type="checkbox"
+                :disabled="settingsLoading || saveBusy"
+                v-model="budgetShowCountdownCodex"
+                @change="persistAppSettings"
+              />
+              <span></span>
+            </label>
+          </ListItem>
+          <ListItem :label="$t('components.general.label.budgetShowForecast')">
+            <label class="mac-switch">
+              <input
+                type="checkbox"
+                :disabled="settingsLoading || saveBusy"
+                v-model="budgetShowForecastCodex"
+                @change="persistAppSettings"
+              />
+              <span></span>
+            </label>
+          </ListItem>
+          <ListItem :label="$t('components.general.label.budgetForecastMethod')">
+            <div class="toggle-with-hint">
+              <select
+                v-model="budgetForecastMethodCodex"
+                :disabled="settingsLoading || saveBusy || !budgetShowForecastCodex"
                 class="mac-select budget-select"
                 @change="persistAppSettings">
                 <option value="cycle">{{ $t('components.general.label.budgetForecastMethodCycle') }}</option>
@@ -895,6 +1092,10 @@ onMounted(async () => {
   font-weight: 600;
   color: var(--mac-text-secondary);
   margin-bottom: 8px;
+}
+
+.mac-panel + .mac-panel {
+  margin-top: 12px;
 }
 
 .toggle-with-hint {

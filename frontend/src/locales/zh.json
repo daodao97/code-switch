@@ -566,6 +566,8 @@
         "budgetForecastMethod1h": "近 1 小时速度",
         "budgetForecastMethodYesterday": "昨日平均速度",
         "budgetForecastMethod24h": "近 24 小时速度",
+        "trayPanelClaude": "Claude Code",
+        "trayPanelCodex": "Codex",
         "autoStart": "开机自启动",
         "switchNotify": "切换通知",
         "switchNotifyHint": "供应商切换或拉黑时发送系统通知",

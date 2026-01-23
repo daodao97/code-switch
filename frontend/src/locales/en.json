@@ -567,6 +567,8 @@
         "budgetForecastMethod1h": "Last 1 hour rate",
         "budgetForecastMethodYesterday": "Yesterday average rate",
         "budgetForecastMethod24h": "Last 24 hours rate",
+        "trayPanelClaude": "Claude Code",
+        "trayPanelCodex": "Codex",
         "autoStart": "Launch at login",
         "switchNotify": "Switch Notification",
         "switchNotifyHint": "Send system notification when provider switches or gets blacklisted",
