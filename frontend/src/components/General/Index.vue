@@ -1088,10 +1088,13 @@ onMounted(async () => {
 }
 
 .panel-title {
+  margin: 0;
+  padding: 12px 18px 6px;
   font-size: 12px;
   font-weight: 600;
   color: var(--mac-text-secondary);
-  margin-bottom: 8px;
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--mac-divider);
 }
 
 .mac-panel + .mac-panel {

@@ -3352,11 +3352,12 @@ const confirmDeleteCliTool = async () => {
   min-width: 32px;
   height: 22px;
   padding: 0 7px;
-  border-radius: 6px;
+  border-radius: 8px;
   font-size: 11px;
   font-weight: 600;
   line-height: 1;
   letter-spacing: 0.03em;
+  text-align: center;
   transition: all 0.2s ease;
 }
 
@@ -3640,63 +3641,79 @@ const confirmDeleteCliTool = async () => {
 }
 
 /* 等级徽章（黑名单模式：黑色/红色） */
-.level-badge {
-  display: inline-block;
+.blacklist-banner .level-badge,
+.level-badge-standalone .level-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 2px 6px;
+  min-width: 28px;
   font-size: 11px;
   font-weight: 700;
-  border-radius: 3px;
+  border-radius: 6px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  line-height: 1;
   flex-shrink: 0;
+  text-align: center;
 }
 
-.level-badge.level-1 {
+.blacklist-banner .level-badge.level-1,
+.level-badge-standalone .level-badge.level-1 {
   background: #fef3c7;
   color: #d97706;
 }
 
-.level-badge.level-2 {
+.blacklist-banner .level-badge.level-2,
+.level-badge-standalone .level-badge.level-2 {
   background: #fed7aa;
   color: #ea580c;
 }
 
-.level-badge.level-3 {
+.blacklist-banner .level-badge.level-3,
+.level-badge-standalone .level-badge.level-3 {
   background: #fecaca;
   color: #dc2626;
 }
 
-.level-badge.level-4 {
+.blacklist-banner .level-badge.level-4,
+.level-badge-standalone .level-badge.level-4 {
   background: #fca5a5;
   color: #b91c1c;
 }
 
-.level-badge.level-5 {
+.blacklist-banner .level-badge.level-5,
+.level-badge-standalone .level-badge.level-5 {
   background: #ef4444;
   color: #fff;
 }
 
-.level-badge.dark.level-1 {
+.blacklist-banner .level-badge.dark.level-1,
+.level-badge-standalone .level-badge.dark.level-1 {
   background: rgba(217, 119, 6, 0.2);
   color: #fbbf24;
 }
 
-.level-badge.dark.level-2 {
+.blacklist-banner .level-badge.dark.level-2,
+.level-badge-standalone .level-badge.dark.level-2 {
   background: rgba(234, 88, 12, 0.2);
   color: #fb923c;
 }
 
-.level-badge.dark.level-3 {
+.blacklist-banner .level-badge.dark.level-3,
+.level-badge-standalone .level-badge.dark.level-3 {
   background: rgba(220, 38, 38, 0.2);
   color: #f87171;
 }
 
-.level-badge.dark.level-4 {
+.blacklist-banner .level-badge.dark.level-4,
+.level-badge-standalone .level-badge.dark.level-4 {
   background: rgba(185, 28, 28, 0.2);
   color: #ef4444;
 }
 
-.level-badge.dark.level-5 {
+.blacklist-banner .level-badge.dark.level-5,
+.level-badge-standalone .level-badge.dark.level-5 {
   background: rgba(220, 38, 38, 0.3);
   color: #fff;
 }
