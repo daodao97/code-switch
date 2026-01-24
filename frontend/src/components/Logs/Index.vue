@@ -16,11 +16,14 @@
       <article
         v-for="card in statsCards"
         :key="card.key"
-        :class="['summary-card', { 'summary-card--clickable': card.key === 'cost' }]"
-        @click="card.key === 'cost' && openCostDetailModal()"
+        :class="['summary-card', { 'summary-card--clickable': card.key === 'cost' || card.key === 'tokens' }]"
+        @click="handleCardClick(card.key)"
       >
         <div class="summary-card__label">{{ card.label }}</div>
-        <div class="summary-card__value">{{ card.value }}</div>
+        <div class="summary-card__value">
+          {{ card.value }}
+          <span v-if="card.subValue" class="summary-card__sub-value">({{ card.subValue }})</span>
+        </div>
         <div class="summary-card__hint">{{ card.hint }}</div>
       </article>
     </section>
@@ -68,6 +71,7 @@
             <th class="col-http">{{ t('components.logs.table.httpCode') }}</th>
             <th class="col-stream">{{ t('components.logs.table.stream') }}</th>
             <th class="col-duration">{{ t('components.logs.table.duration') }}</th>
+            <th class="col-cost">{{ t('components.logs.table.cost') }}</th>
             <th class="col-tokens">{{ t('components.logs.table.tokens') }}</th>
           </tr>
         </thead>
@@ -80,31 +84,32 @@
             <td :class="['code', httpCodeClass(item.http_code)]">{{ item.http_code }}</td>
             <td><span :class="['stream-tag', item.is_stream ? 'on' : 'off']">{{ formatStream(item.is_stream) }}</span></td>
             <td><span :class="['duration-tag', durationColor(item.duration_sec)]">{{ formatDuration(item.duration_sec) }}</span></td>
+            <td class="cost-cell">{{ formatCurrency(item.total_cost) }}</td>
             <td class="token-cell">
               <div>
                 <span class="token-label">{{ t('components.logs.tokenLabels.input') }}</span>
-                <span class="token-value">{{ formatNumber(item.input_tokens) }}</span>
+                <span class="token-value">{{ formatTokenNumber(item.input_tokens) }}</span>
               </div>
               <div>
                 <span class="token-label">{{ t('components.logs.tokenLabels.output') }}</span>
-                <span class="token-value">{{ formatNumber(item.output_tokens) }}</span>
+                <span class="token-value">{{ formatTokenNumber(item.output_tokens) }}</span>
               </div>
               <div>
                 <span class="token-label">{{ t('components.logs.tokenLabels.reasoning') }}</span>
-                <span class="token-value">{{ formatNumber(item.reasoning_tokens) }}</span>
+                <span class="token-value">{{ formatTokenNumber(item.reasoning_tokens) }}</span>
               </div>
               <div>
                 <span class="token-label">{{ t('components.logs.tokenLabels.cacheWrite') }}</span>
-                <span class="token-value">{{ formatNumber(item.cache_create_tokens) }}</span>
+                <span class="token-value">{{ formatTokenNumber(item.cache_create_tokens) }}</span>
               </div>
               <div>
                 <span class="token-label">{{ t('components.logs.tokenLabels.cacheRead') }}</span>
-                <span class="token-value">{{ formatNumber(item.cache_read_tokens) }}</span>
+                <span class="token-value">{{ formatTokenNumber(item.cache_read_tokens) }}</span>
               </div>
             </td>
           </tr>
           <tr v-if="!pagedLogs.length && !loading">
-            <td colspan="8" class="empty">{{ t('components.logs.empty') }}</td>
+            <td colspan="9" class="empty">{{ t('components.logs.empty') }}</td>
           </tr>
         </tbody>
       </table>
@@ -142,6 +147,26 @@
             <span class="cost-detail-item__value">{{ formatCurrency(item.cost_total) }}</span>
           </li>
         </ul>
+      </div>
+    </BaseModal>
+
+    <!-- Token 明细弹窗 -->
+    <BaseModal
+      :open="tokenDetailModal.open"
+      :title="t('components.logs.tokenDetail.title')"
+      @close="closeTokenDetailModal"
+    >
+      <div class="token-detail-modal">
+        <div class="token-detail-list">
+          <div class="token-detail-item">
+            <span class="token-detail-item__name">{{ t('components.logs.tokenLabels.input') }}</span>
+            <span class="token-detail-item__value">{{ formatTokenNumber(stats?.input_tokens) }}</span>
+          </div>
+          <div class="token-detail-item">
+            <span class="token-detail-item__name">{{ t('components.logs.tokenLabels.output') }}</span>
+            <span class="token-detail-item__value">{{ formatTokenNumber(stats?.output_tokens) }}</span>
+          </div>
+        </div>
       </div>
     </BaseModal>
   </div>
@@ -201,6 +226,13 @@ const costDetailModal = reactive<{
   data: [],
 })
 
+// Token 明细弹窗状态
+const tokenDetailModal = reactive<{
+  open: boolean
+}>({
+  open: false,
+})
+
 // 打开金额明细弹窗
 const openCostDetailModal = async () => {
   costDetailModal.open = true
@@ -223,6 +255,25 @@ const openCostDetailModal = async () => {
 // 关闭金额明细弹窗
 const closeCostDetailModal = () => {
   costDetailModal.open = false
+}
+
+// 处理卡片点击
+const handleCardClick = (key: string) => {
+  if (key === 'cost') {
+    openCostDetailModal()
+  } else if (key === 'tokens') {
+    openTokenDetailModal()
+  }
+}
+
+// 打开 Token 明细弹窗
+const openTokenDetailModal = () => {
+  tokenDetailModal.open = true
+}
+
+// 关闭 Token 明细弹窗
+const closeTokenDetailModal = () => {
+  tokenDetailModal.open = false
 }
 
 const parseLogDate = (value?: string) => {
@@ -512,6 +563,44 @@ const formatNumber = (value?: number) => {
   return value.toLocaleString()
 }
 
+/**
+ * 格式化 token 数值，支持 k/M/B 单位换算
+ * @author sm
+ */
+const formatTokenNumber = (value?: number) => {
+  if (value === undefined || value === null) return '—'
+
+  if (value >= 1_000_000_000) {
+    return `${(value / 1_000_000_000).toFixed(2)}B`
+  }
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(2)}M`
+  }
+  if (value >= 1_000) {
+    return `${(value / 1_000).toFixed(2)}k`
+  }
+
+  return value.toLocaleString()
+}
+
+/**
+ * 计算缓存命中率
+ * @param cacheRead 缓存读取 token 数
+ * @param inputTokens 输入 token 数
+ * @returns 命中率百分比字符串
+ * @author sm
+ */
+const formatCacheHitRate = (cacheRead?: number, inputTokens?: number) => {
+  const read = cacheRead ?? 0
+  const input = inputTokens ?? 0
+  const total = read + input
+
+  if (total === 0) return '0%'
+
+  const rate = (read / total) * 100
+  return `${rate.toFixed(1)}%`
+}
+
 const formatCurrency = (value?: number) => {
   if (value === undefined || value === null || Number.isNaN(value)) {
     return '$0.0000'
@@ -547,13 +636,14 @@ const statsCards = computed(() => {
       key: 'tokens',
       label: t('components.logs.summary.tokens'),
       hint: t('components.logs.summary.tokenHint'),
-      value: data ? formatNumber(totalTokens) : '—',
+      value: data ? formatTokenNumber(totalTokens) : '—',
     },
     {
       key: 'cacheReads',
       label: t('components.logs.summary.cache'),
       hint: t('components.logs.summary.cacheHint'),
-      value: data ? formatNumber(data.cache_read_tokens) : '—',
+      value: data ? formatTokenNumber(data.cache_read_tokens) : '—',
+      subValue: data ? formatCacheHitRate(data.cache_read_tokens, data.input_tokens) : '',
     },
     {
       key: 'cost',
@@ -646,6 +736,13 @@ onUnmounted(() => {
   color: #94a3b8;
 }
 
+.summary-card__sub-value {
+  font-size: 0.65em;
+  font-weight: 400;
+  color: #64748b;
+  margin-left: 0.25rem;
+}
+
 html.dark .summary-card {
   border-color: rgba(255, 255, 255, 0.12);
   background: radial-gradient(circle at top, rgba(148, 163, 184, 0.2), rgba(15, 23, 42, 0.35));
@@ -661,6 +758,10 @@ html.dark .summary-card__value {
 
 html.dark .summary-card__hint {
   color: rgba(186, 194, 210, 0.8);
+}
+
+html.dark .summary-card__sub-value {
+  color: #94a3b8;
 }
 
 @media (max-width: 768px) {
@@ -735,6 +836,56 @@ html.dark .cost-detail-item__name {
 .cost-detail-item__value {
   font-weight: 600;
   color: #f97316;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Token 弹窗 */
+.token-detail-modal {
+  min-height: 80px;
+}
+.token-detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.token-detail-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  background: rgba(148, 163, 184, 0.08);
+  border-radius: 8px;
+  transition: background 0.15s ease;
+}
+.token-detail-item:hover {
+  background: rgba(148, 163, 184, 0.12);
+}
+html.dark .token-detail-item {
+  background: rgba(148, 163, 184, 0.12);
+}
+html.dark .token-detail-item:hover {
+  background: rgba(148, 163, 184, 0.18);
+}
+.token-detail-item__name {
+  font-weight: 500;
+  color: #1e293b;
+}
+html.dark .token-detail-item__name {
+  color: #f1f5f9;
+}
+.token-detail-item__value {
+  font-weight: 600;
+  color: #34d399;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 金额列 */
+.col-cost {
+  width: 80px;
+}
+.cost-cell {
+  color: #f97316;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 </style>

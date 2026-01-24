@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -32,11 +33,25 @@ var assets embed.FS
 var trayIcons embed.FS
 
 type AppService struct {
-	App *application.App
+	App        *application.App
+	TrayWindow application.Window
 }
 
 func (a *AppService) SetApp(app *application.App) {
 	a.App = app
+}
+
+func (a *AppService) SetTrayWindowHeight(height int) {
+	if runtime.GOOS != "darwin" || a.TrayWindow == nil {
+		return
+	}
+	if height < trayWindowMinHeight {
+		height = trayWindowMinHeight
+	}
+	if height > trayWindowMaxHeight {
+		height = trayWindowMaxHeight
+	}
+	a.TrayWindow.SetSize(trayWindowWidth, height)
 }
 
 func (a *AppService) OpenSecondWindow() {
@@ -284,8 +299,8 @@ func main() {
 	// 'URL' is the URL that will be loaded into the webview.
 	mainWindow := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:     "Code Switch R",
-		Width:     1024,
-		Height:    800,
+		Width:     1400,
+		Height:    1040,
 		MinWidth:  600,
 		MinHeight: 300,
 		Mac: application.MacWindow{
@@ -332,17 +347,54 @@ func main() {
 		e.Cancel()
 	})
 
+	var trayWindow application.Window
+
 	app.Event.OnApplicationEvent(events.Mac.ApplicationShouldHandleReopen, func(event *application.ApplicationEvent) {
 		showMainWindow(true)
 	})
 
 	app.Event.OnApplicationEvent(events.Mac.ApplicationDidBecomeActive, func(event *application.ApplicationEvent) {
+		if trayWindow != nil {
+			// Tray exists on macOS; avoid auto-opening the main window on activation.
+			return
+		}
 		if mainWindow.IsVisible() {
 			mainWindow.Focus()
 			return
 		}
 		showMainWindow(true)
 	})
+
+	if runtime.GOOS == "darwin" {
+		trayWindow = app.Window.NewWithOptions(application.WebviewWindowOptions{
+			Title:       "Code Switch Tray",
+			Name:        "tray",
+			Width:       trayWindowWidth,
+			Height:      trayWindowMinHeight,
+			MinWidth:    trayWindowWidth,
+			MaxWidth:    trayWindowWidth,
+			MinHeight:   trayWindowMinHeight,
+			MaxHeight:   trayWindowMaxHeight,
+			AlwaysOnTop: true,
+			DisableResize: true,
+			Frameless:     true,
+			Hidden:        true,
+			BackgroundType: application.BackgroundTypeTransparent,
+			BackgroundColour: application.NewRGBA(0, 0, 0, 0),
+			Mac: application.MacWindow{
+				Backdrop:     application.MacBackdropTransparent,
+				TitleBar:     application.MacTitleBarHidden,
+				DisableShadow: true,
+				WindowLevel:  application.MacWindowLevelPopUpMenu,
+			},
+			URL: "/#/tray",
+		})
+		trayWindow.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+			trayWindow.Hide()
+			e.Cancel()
+		})
+		appservice.TrayWindow = trayWindow
+	}
 
 	systray := app.SystemTray.New()
 	// systray.SetLabel("AI Code Studio")
@@ -354,24 +406,44 @@ func main() {
 		systray.SetDarkModeIcon(darkIcon)
 	}
 
-	trayMenu := application.NewMenu()
-	trayMenu.Add("显示主窗口").OnClick(func(ctx *application.Context) {
-		showMainWindow(true)
-	})
-	trayMenu.Add("退出").OnClick(func(ctx *application.Context) {
-		app.Quit()
-	})
-	systray.SetMenu(trayMenu)
-
-	systray.OnClick(func() {
-		if !mainWindow.IsVisible() {
+	if runtime.GOOS == "darwin" && trayWindow != nil {
+		trayMenu := application.NewMenu()
+		trayMenu.Add("显示主窗口").OnClick(func(ctx *application.Context) {
 			showMainWindow(true)
-			return
+		})
+		trayMenu.Add("退出").OnClick(func(ctx *application.Context) {
+			app.Quit()
+		})
+		systray.SetMenu(trayMenu)
+		systray.AttachWindow(trayWindow).WindowOffset(8)
+		systray.OnRightClick(func() {
+			systray.OpenMenu()
+		})
+	} else {
+		refreshTrayMenu := func() {
+			used, total := getTrayUsage(logService, appSettings)
+			trayMenu := buildUsageTrayMenu(used, total, func() {
+				showMainWindow(true)
+			}, func() {
+				app.Quit()
+			})
+			systray.SetMenu(trayMenu)
 		}
-		if !mainWindow.IsFocused() {
-			focusMainWindow()
-		}
-	})
+		refreshTrayMenu()
+		systray.OnRightClick(func() {
+			refreshTrayMenu()
+			systray.OpenMenu()
+		})
+		systray.OnClick(func() {
+			if !mainWindow.IsVisible() {
+				showMainWindow(true)
+				return
+			}
+			if !mainWindow.IsFocused() {
+				focusMainWindow()
+			}
+		})
+	}
 
 	appservice.SetApp(app)
 
@@ -412,6 +484,90 @@ func handleDockVisibility(service *dock.DockService, show bool) {
 	} else {
 		service.HideAppIcon()
 	}
+}
+
+const (
+	trayWindowWidth     = 360
+	trayWindowMinHeight = 120
+	trayWindowMaxHeight = 420
+	trayProgressBarWidth = 28
+)
+
+func getTrayUsage(logService *services.LogService, appSettings *services.AppSettingsService) (float64, float64) {
+	used := 0.0
+	total := 0.0
+	adjustment := 0.0
+	if logService != nil {
+		stats, err := logService.StatsSince("")
+		if err == nil {
+			used = stats.CostTotal
+		}
+	}
+	if appSettings != nil {
+		settings, err := appSettings.GetAppSettings()
+		if err == nil {
+			total = settings.BudgetTotal
+			adjustment = settings.BudgetUsedAdjustment
+		}
+	}
+	used += adjustment
+	if used < 0 {
+		used = 0
+	}
+	if total < 0 {
+		total = 0
+	}
+	return used, total
+}
+
+func buildUsageTrayMenu(used float64, total float64, onShow func(), onQuit func()) *application.Menu {
+	menu := application.NewMenu()
+	menu.Add(trayUsageLabel(used, total)).SetEnabled(false)
+	menu.Add(trayProgressLabel(used, total)).SetEnabled(false)
+	menu.AddSeparator()
+	menu.Add("显示主窗口").OnClick(func(ctx *application.Context) {
+		onShow()
+	})
+	menu.Add("退出").OnClick(func(ctx *application.Context) {
+		onQuit()
+	})
+	return menu
+}
+
+func trayUsageLabel(used float64, total float64) string {
+	usedLabel := formatCurrency(used)
+	if total <= 0 {
+		return fmt.Sprintf("今日已用 %s / 未设置", usedLabel)
+	}
+	return fmt.Sprintf("今日已用 %s / %s", usedLabel, formatCurrency(total))
+}
+
+func trayProgressLabel(used float64, total float64) string {
+	bar := strings.Repeat("-", trayProgressBarWidth)
+	if total <= 0 {
+		return fmt.Sprintf("进度 [%s] --%%", bar)
+	}
+	ratio := used / total
+	if ratio < 0 {
+		ratio = 0
+	}
+	if ratio > 1 {
+		ratio = 1
+	}
+	filled := int(math.Round(ratio * float64(trayProgressBarWidth)))
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > trayProgressBarWidth {
+		filled = trayProgressBarWidth
+	}
+	bar = strings.Repeat("#", filled) + strings.Repeat("-", trayProgressBarWidth-filled)
+	percent := int(math.Round(ratio * 100))
+	return fmt.Sprintf("进度 [%s] %d%%", bar, percent)
+}
+
+func formatCurrency(value float64) string {
+	return fmt.Sprintf("$%.2f", value)
 }
 
 // ============================================================

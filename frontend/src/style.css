@@ -376,37 +376,18 @@ html.dark .mac-sidebar-item:hover {
 	position: relative;
 	display: flex;
 	gap: 4px;
-	overflow-x: auto;
-	padding-bottom: 8px;
-	scrollbar-width: thin;
-	scrollbar-color: rgba(255,255,255,0.2) transparent;
+	overflow: hidden;
 	width: 100%;
-	justify-content: flex-start;
-}
-
-.contrib-grid::-webkit-scrollbar {
-	height: 6px;
-}
-
-.contrib-grid::-webkit-scrollbar-track {
-	background: transparent;
-}
-
-.contrib-grid::-webkit-scrollbar-thumb {
-	background: rgba(255,255,255,0.2);
-	border-radius: 3px;
-}
-
-.contrib-grid::-webkit-scrollbar-thumb:hover {
-	background: rgba(255,255,255,0.3);
+	justify-content: space-between;
 }
 
 .contrib-column {
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
-	flex: 0 0 auto;
-	min-width: 14px;
+	flex: 1 1 0;
+	min-width: 10px;
+	max-width: 18px;
 }
 
 .contrib-cell {
@@ -500,7 +481,8 @@ html.dark .mac-sidebar-item:hover {
 	}
 
 	.contrib-column {
-		min-width: 12px;
+		min-width: 10px;
+		max-width: 15px;
 	}
 
 	.contrib-grid {
@@ -519,13 +501,8 @@ html.dark .mac-sidebar-item:hover {
 	}
 
 	.contrib-column {
-		min-width: 10px;
-	}
-
-	.contrib-cell,
-	.legend-box {
-		width: 10px;
-		height: 10px;
+		min-width: 8px;
+		max-width: 12px;
 	}
 }
 .automation-section {
@@ -1666,6 +1643,11 @@ html.dark .secondary-btn:active:not(:disabled) {
   padding-right: 32px;
 }
 
+/* 通用宽度工具类 */
+.w-full {
+  width: 100%;
+}
+
 .icon-select {
   position: relative;
   width: 100%;
@@ -1745,6 +1727,39 @@ html.dark .secondary-btn:active:not(:disabled) {
 .icon-select-label {
   font-weight: 500;
 }
+
+/* 图标搜索框样式 */
+.icon-search-wrapper {
+  padding: 8px;
+  border-bottom: 1px solid var(--mac-border);
+  position: sticky;
+  top: 0;
+  background: var(--mac-surface);
+  z-index: 1;
+}
+
+.icon-search-input {
+  width: 100%;
+  border: 1px solid var(--mac-border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  background: var(--mac-surface-strong);
+  color: var(--mac-text);
+  outline: none;
+}
+
+.icon-search-input:focus {
+  border-color: var(--mac-accent);
+}
+
+.icon-no-results {
+  padding: 16px;
+  text-align: center;
+  color: var(--mac-text-secondary);
+  font-size: 0.85rem;
+}
+
 .confirm-modal {
   max-width: 420px;
 }
@@ -1778,7 +1793,7 @@ html.dark .secondary-btn:active:not(:disabled) {
 }
 
 /* 全局按钮样式修复 - 防止 Tailwind Preflight 导致的布局问题 */
-button:where(:not(.ghost-icon):not(.mac-switch):not(.nav-item):not(.platform-tab):not(.tab-pill):not(.collapse-btn):not(.toggle-switch):not(.action-btn):not(.remove-btn)) {
+button:where(:not(.ghost-icon):not(.mac-switch):not(.nav-item):not(.platform-tab):not(.tab-pill):not(.collapse-btn):not(.toggle-switch):not(.action-btn):not(.remove-btn):not(.icon-select-button):not(.level-select-button)) {
   display: inline-flex !important;
   flex-direction: row !important;
   align-items: center !important;

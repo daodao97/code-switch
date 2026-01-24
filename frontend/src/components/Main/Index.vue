@@ -498,7 +498,7 @@
               class="ghost-icon direct-apply-btn"
               :class="{ 'is-active': isDirectApplied(card) && !activeProxyState }"
               :disabled="activeProxyState"
-              :title="activeProxyState ? t('components.main.directApply.proxyEnabled') : (isDirectApplied(card) ? t('components.main.directApply.inUse') : t('components.main.directApply.title'))"
+              :data-tooltip="activeProxyState ? t('components.main.directApply.proxyEnabled') : (isDirectApplied(card) ? t('components.main.directApply.inUse') : t('components.main.directApply.title'))"
               @click.stop="!isDirectApplied(card) && handleDirectApply(card)"
             >
               <span v-if="isDirectApplied(card) && !activeProxyState" class="apply-text">{{ t('components.main.directApply.inUse') }}</span>
@@ -506,7 +506,7 @@
                 <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
             </button>
-            <button class="ghost-icon" @click="configure(card)">
+            <button class="ghost-icon" :data-tooltip="t('components.main.form.editTitle')" @click="configure(card)">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path
                   d="M11.983 2.25a1.125 1.125 0 011.077.81l.563 2.101a7.482 7.482 0 012.326 1.343l2.08-.621a1.125 1.125 0 011.356.651l1.313 3.207a1.125 1.125 0 01-.442 1.339l-1.86 1.205a7.418 7.418 0 010 2.686l1.86 1.205a1.125 1.125 0 01.442 1.339l-1.313 3.207a1.125 1.125 0 01-1.356.651l-2.08-.621a7.482 7.482 0 01-2.326 1.343l-.563 2.101a1.125 1.125 0 01-1.077.81h-2.634a1.125 1.125 0 01-1.077-.81l-.563-2.101a7.482 7.482 0 01-2.326-1.343l-2.08.621a1.125 1.125 0 01-1.356-.651l-1.313-3.207a1.125 1.125 0 01.442-1.339l1.86-1.205a7.418 7.418 0 010-2.686l-1.86-1.205a1.125 1.125 0 01-.442-1.339l1.313-3.207a1.125 1.125 0 011.356-.651l2.08.621a7.482 7.482 0 012.326-1.343l.563-2.101a1.125 1.125 0 011.077-.81h2.634z"
@@ -531,7 +531,7 @@
                 />
               </svg>
             </button>
-            <button class="ghost-icon" @click="requestRemove(card)">
+            <button class="ghost-icon" :data-tooltip="t('components.main.form.actions.delete')" @click="requestRemove(card)">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path
                   d="M9 3h6m-7 4h8m-6 0v11m4-11v11M5 7h14l-.867 12.138A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.862L5 7z"
@@ -657,7 +657,7 @@
 
                 <div class="form-field">
                   <span>{{ t('components.main.form.labels.icon') }}</span>
-                  <Listbox v-model="modalState.form.icon" v-slot="{ open }">
+                  <Listbox v-model="modalState.form.icon" v-slot="{ open }" class="w-full">
                     <div class="icon-select">
                       <ListboxButton class="icon-select-button">
                         <span class="icon-preview" v-html="iconSvg(modalState.form.icon)" aria-hidden="true"></span>
@@ -667,8 +667,18 @@
                         </svg>
                       </ListboxButton>
                       <ListboxOptions v-if="open" class="icon-select-options">
+                        <div class="icon-search-wrapper">
+                          <input
+                            v-model="iconSearchQuery"
+                            type="text"
+                            class="icon-search-input"
+                            :placeholder="t('components.main.form.placeholders.searchIcon')"
+                            @click.stop
+                            @keydown.stop
+                          />
+                        </div>
                         <ListboxOption
-                          v-for="iconName in iconOptions"
+                          v-for="iconName in filteredIconOptions"
                           :key="iconName"
                           :value="iconName"
                           v-slot="{ active, selected }"
@@ -678,6 +688,9 @@
                             <span class="icon-name">{{ iconName }}</span>
                           </div>
                         </ListboxOption>
+                        <div v-if="filteredIconOptions.length === 0" class="icon-no-results">
+                          {{ t('components.main.form.noIconResults') }}
+                        </div>
                       </ListboxOptions>
                     </div>
                   </Listbox>
@@ -987,14 +1000,8 @@ import { computed, reactive, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Listbox, ListboxButton, ListboxOptions, ListboxOption } from '@headlessui/vue'
 import { Browser, Call, Events } from '@wailsio/runtime'
-import {
-	buildUsageHeatmapMatrix,
-	generateFallbackUsageHeatmap,
-	DEFAULT_HEATMAP_DAYS,
-	calculateHeatmapDayRange,
-	type UsageHeatmapWeek,
-	type UsageHeatmapDay,
-} from '../../data/usageHeatmap'
+import { type UsageHeatmapDay } from '../../data/usageHeatmap'
+import { useAdaptiveHeatmap } from '../../composables/useAdaptiveHeatmap'
 import { automationCardGroups, createAutomationCards, type AutomationCard } from '../../data/cards'
 import lobeIcons from '../../icons/lobeIconMap'
 import BaseButton from '../common/BaseButton.vue'
@@ -1008,7 +1015,7 @@ import { LoadProviders, SaveProviders, DuplicateProvider } from '../../../bindin
 import { GetProviders as GetGeminiProviders, UpdateProvider as UpdateGeminiProvider, AddProvider as AddGeminiProvider, DeleteProvider as DeleteGeminiProvider, ReorderProviders as ReorderGeminiProviders } from '../../../bindings/codeswitch/services/geminiservice'
 import { fetchProxyStatus, enableProxy, disableProxy } from '../../services/claudeSettings'
 import { fetchGeminiProxyStatus, enableGeminiProxy, disableGeminiProxy } from '../../services/geminiSettings'
-import { fetchHeatmapStats, fetchProviderDailyStats, type ProviderDailyStat } from '../../services/logs'
+import { fetchProviderDailyStats, type ProviderDailyStat } from '../../services/logs'
 import { fetchCurrentVersion } from '../../services/version'
 import { fetchAppSettings, type AppSettings } from '../../services/appSettings'
 import { getUpdateState, restartApp, type UpdateState } from '../../services/update'
@@ -1059,9 +1066,14 @@ const themeIcon = computed(() => (resolvedTheme.value === 'dark' ? 'moon' : 'sun
 const releasePageUrl = 'https://github.com/Rogers-F/code-switch-R/releases'
 const releaseApiUrl = 'https://api.github.com/repos/Rogers-F/code-switch-R/releases/latest'
 
-const HEATMAP_DAYS = DEFAULT_HEATMAP_DAYS
-const usageHeatmap = ref<UsageHeatmapWeek[]>(generateFallbackUsageHeatmap(HEATMAP_DAYS))
 const heatmapContainerRef = ref<HTMLElement | null>(null)
+// 使用自适应热力图 composable
+const {
+  displayData: usageHeatmap,
+  init: initHeatmap,
+  cleanup: cleanupHeatmap,
+  reload: reloadHeatmap,
+} = useAdaptiveHeatmap(heatmapContainerRef)
 const tooltipRef = ref<HTMLElement | null>(null)
 const proxyStates = reactive<Record<ProviderTab, boolean>>({
   claude: false,
@@ -1267,6 +1279,23 @@ const usageTooltip = reactive({
 
 const formatMetric = (value: number) => value.toLocaleString()
 
+/**
+ * 格式化 token 数值，支持 k/M/B 单位换算
+ * @author sm
+ */
+const formatTokenNumber = (value: number) => {
+  if (value >= 1_000_000_000) {
+    return `${(value / 1_000_000_000).toFixed(2)}B`
+  }
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(2)}M`
+  }
+  if (value >= 1_000) {
+    return `${(value / 1_000).toFixed(2)}k`
+  }
+  return value.toLocaleString()
+}
+
 const tooltipDateFormatter = computed(() =>
   new Intl.DateTimeFormat(locale.value || 'en', {
     month: 'short',
@@ -1312,17 +1341,17 @@ const usageTooltipMetrics = computed(() => [
   {
     key: 'inputTokens',
     label: t('components.main.heatmap.metrics.inputTokens'),
-    value: formatMetric(usageTooltip.inputTokens),
+    value: formatTokenNumber(usageTooltip.inputTokens),
   },
   {
     key: 'outputTokens',
     label: t('components.main.heatmap.metrics.outputTokens'),
-    value: formatMetric(usageTooltip.outputTokens),
+    value: formatTokenNumber(usageTooltip.outputTokens),
   },
   {
     key: 'reasoningTokens',
     label: t('components.main.heatmap.metrics.reasoningTokens'),
-    value: formatMetric(usageTooltip.reasoningTokens),
+    value: formatTokenNumber(usageTooltip.reasoningTokens),
   },
 ])
 
@@ -1487,18 +1516,6 @@ const compareVersions = (current: string, remote: string) => {
     return cur < rem ? -1 : 1
   }
   return 0
-}
-
-const loadUsageHeatmap = async () => {
-	try {
-		const rangeDays = calculateHeatmapDayRange(HEATMAP_DAYS)
-		const stats = await fetchHeatmapStats(rangeDays)
-		usageHeatmap.value = buildUsageHeatmapMatrix(stats, HEATMAP_DAYS)
-	} catch (error) {
-		console.error('Failed to load usage heatmap stats', error)
-		// 加载热力图失败时提示用户
-		showToast(t('components.main.errors.loadHeatmapFailed'), 'warning')
-	}
 }
 
 // 本地 GeminiProvider 类型定义（避免依赖 CI 生成的 bindings）
@@ -2030,7 +2047,7 @@ const refreshAllData = async () => {
   refreshing.value = true
   try {
     await Promise.all([
-      loadUsageHeatmap(),
+      reloadHeatmap(),
       loadProvidersFromDisk(),
       ...providerTabIds.map(refreshProxyState),
       ...providerTabIds.map((tab) => refreshDirectAppliedStatus(tab)),
@@ -2096,7 +2113,7 @@ const providerStatDisplay = (providerName: string): ProviderStatDisplay => {
   return {
     state: 'ready',
     requests: `${t('components.main.providers.requests')}: ${formatMetric(stat.total_requests)}`,
-    tokens: `${t('components.main.providers.tokens')}: ${formatMetric(totalTokens)}`,
+    tokens: `${t('components.main.providers.tokens')}: ${formatTokenNumber(totalTokens)}`,
     cost: `${t('components.main.providers.cost')}: ${currencyFormatter.value.format(Math.max(stat.cost_total, 0))}`,
     successRateLabel,
     successRateClass,
@@ -2234,7 +2251,7 @@ let unsubscribeSwitched: (() => void) | undefined
 let unsubscribeBlacklisted: (() => void) | undefined
 
 onMounted(async () => {
-  void loadUsageHeatmap()
+  void initHeatmap()
   await loadProvidersFromDisk()
   await Promise.all(providerTabIds.map(refreshProxyState))
   await Promise.all(providerTabIds.map((tab) => refreshDirectAppliedStatus(tab)))
@@ -2300,6 +2317,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  cleanupHeatmap()
   stopProviderStatsTimer()
   window.removeEventListener('app-settings-updated', handleAppSettingsUpdated)
   stopUpdateTimer()
@@ -2511,6 +2529,14 @@ type VendorForm = {
 
 const iconOptions = Object.keys(lobeIcons).sort((a, b) => a.localeCompare(b))
 const defaultIconKey = iconOptions[0] ?? 'aicoding'
+
+// 图标搜索筛选
+const iconSearchQuery = ref('')
+const filteredIconOptions = computed(() => {
+  const query = iconSearchQuery.value.toLowerCase().trim()
+  if (!query) return iconOptions
+  return iconOptions.filter(name => name.toLowerCase().includes(query))
+})
 
 const defaultFormValues = (platform?: string): VendorForm => ({
   name: '',
@@ -3326,11 +3352,12 @@ const confirmDeleteCliTool = async () => {
   min-width: 32px;
   height: 22px;
   padding: 0 7px;
-  border-radius: 6px;
+  border-radius: 8px;
   font-size: 11px;
   font-weight: 600;
   line-height: 1;
   letter-spacing: 0.03em;
+  text-align: center;
   transition: all 0.2s ease;
 }
 
@@ -3614,63 +3641,79 @@ const confirmDeleteCliTool = async () => {
 }
 
 /* 等级徽章（黑名单模式：黑色/红色） */
-.level-badge {
-  display: inline-block;
+.blacklist-banner .level-badge,
+.level-badge-standalone .level-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 2px 6px;
+  min-width: 28px;
   font-size: 11px;
   font-weight: 700;
-  border-radius: 3px;
+  border-radius: 6px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  line-height: 1;
   flex-shrink: 0;
+  text-align: center;
 }
 
-.level-badge.level-1 {
+.blacklist-banner .level-badge.level-1,
+.level-badge-standalone .level-badge.level-1 {
   background: #fef3c7;
   color: #d97706;
 }
 
-.level-badge.level-2 {
+.blacklist-banner .level-badge.level-2,
+.level-badge-standalone .level-badge.level-2 {
   background: #fed7aa;
   color: #ea580c;
 }
 
-.level-badge.level-3 {
+.blacklist-banner .level-badge.level-3,
+.level-badge-standalone .level-badge.level-3 {
   background: #fecaca;
   color: #dc2626;
 }
 
-.level-badge.level-4 {
+.blacklist-banner .level-badge.level-4,
+.level-badge-standalone .level-badge.level-4 {
   background: #fca5a5;
   color: #b91c1c;
 }
 
-.level-badge.level-5 {
+.blacklist-banner .level-badge.level-5,
+.level-badge-standalone .level-badge.level-5 {
   background: #ef4444;
   color: #fff;
 }
 
-.level-badge.dark.level-1 {
+.blacklist-banner .level-badge.dark.level-1,
+.level-badge-standalone .level-badge.dark.level-1 {
   background: rgba(217, 119, 6, 0.2);
   color: #fbbf24;
 }
 
-.level-badge.dark.level-2 {
+.blacklist-banner .level-badge.dark.level-2,
+.level-badge-standalone .level-badge.dark.level-2 {
   background: rgba(234, 88, 12, 0.2);
   color: #fb923c;
 }
 
-.level-badge.dark.level-3 {
+.blacklist-banner .level-badge.dark.level-3,
+.level-badge-standalone .level-badge.dark.level-3 {
   background: rgba(220, 38, 38, 0.2);
   color: #f87171;
 }
 
-.level-badge.dark.level-4 {
+.blacklist-banner .level-badge.dark.level-4,
+.level-badge-standalone .level-badge.dark.level-4 {
   background: rgba(185, 28, 28, 0.2);
   color: #ef4444;
 }
 
-.level-badge.dark.level-5 {
+.blacklist-banner .level-badge.dark.level-5,
+.level-badge-standalone .level-badge.dark.level-5 {
   background: rgba(220, 38, 38, 0.3);
   color: #fff;
 }

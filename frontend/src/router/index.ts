@@ -9,6 +9,7 @@ import SpeedTestPage from '../components/SpeedTest/Index.vue'
 import EnvCheckPage from '../components/EnvCheck/Index.vue'
 import ConsolePage from '../components/Console/Index.vue'
 import AvailabilityPage from '../components/Availability/Index.vue'
+import TrayPage from '../components/Tray/Index.vue'
 
 const routes = [
   { path: '/', component: MainPage },
@@ -21,6 +22,7 @@ const routes = [
   { path: '/logs', component: LogsPage },
   { path: '/console', component: ConsolePage },
   { path: '/settings', component: GeneralPage },
+  { path: '/tray', component: TrayPage },
 ]
 
 export default createRouter({
