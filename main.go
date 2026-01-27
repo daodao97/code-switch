@@ -4,15 +4,10 @@ import (
 	"codeswitch/services"
 	"embed"
 	_ "embed"
-	"encoding/json"
 	"fmt"
 	"log"
 	"math"
-	"os"
-	"path/filepath"
 	"runtime"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -84,15 +79,6 @@ func (a *AppService) OpenSecondWindow() {
 func main() {
 	appservice := &AppService{}
 
-	// 【更新恢复】全平台：检查并从失败的更新中恢复
-	checkAndRecoverFromFailedUpdate()
-
-	// 【P1-5 加固】幂等清理：处理更新脚本崩溃导致的残留 pending 文件
-	cleanupStalePendingUpdate()
-
-	// 【残留清理】全平台：清理更新过程中的临时文件（Windows/Linux/macOS）
-	cleanupOldFiles()
-
 	// 【修复】第一步：初始化数据库（必须最先执行）
 	// 解决问题：InitGlobalDBQueue 依赖 xdb.DB("default")，但 xdb.Inits() 在 NewProviderRelayService 中
 	if err := services.InitDatabase(); err != nil {
@@ -124,7 +110,6 @@ func main() {
 	codexSettings := services.NewCodexSettingsService(providerRelay.Addr())
 	cliConfigService := services.NewCliConfigService(providerRelay.Addr())
 	logService := services.NewLogService()
-	updateService := services.NewUpdateService(AppVersion)
 	mcpService := services.NewMCPService()
 	skillService := services.NewSkillService()
 	promptService := services.NewPromptService()
@@ -140,26 +125,10 @@ func main() {
 	}
 	dockService := dock.New()
 	versionService := NewVersionService()
+	updateService := services.NewUpdateService(AppVersion)
 	consoleService := services.NewConsoleService()
 	customCliService := services.NewCustomCliService(providerRelay.Addr())
 	networkService := services.NewNetworkService(providerRelay.Addr(), claudeSettings, codexSettings, geminiService)
-
-	// 应用待处理的更新
-	go func() {
-		time.Sleep(2 * time.Second)
-		if err := updateService.ApplyUpdate(); err != nil {
-			log.Printf("应用更新失败: %v", err)
-		}
-	}()
-
-	// 启动定时检查（如果启用）
-	if updateService.IsAutoCheckEnabled() {
-		go func() {
-			time.Sleep(10 * time.Second) // 延迟10秒，等待应用完成初始化
-			updateService.CheckUpdateAsync() // 启动时检查一次
-			updateService.StartDailyCheck()  // 启动每日8点定时检查
-		}()
-	}
 
 	go func() {
 		if err := providerRelay.Start(); err != nil {
@@ -229,7 +198,6 @@ func main() {
 			application.NewService(cliConfigService),
 			application.NewService(logService),
 			application.NewService(appSettings),
-			application.NewService(updateService),
 			application.NewService(mcpService),
 			application.NewService(skillService),
 			application.NewService(promptService),
@@ -241,6 +209,7 @@ func main() {
 			application.NewService(healthCheckService),
 			application.NewService(dockService),
 			application.NewService(versionService),
+			application.NewService(updateService),
 			application.NewService(geminiService),
 			application.NewService(consoleService),
 			application.NewService(customCliService),
@@ -256,6 +225,8 @@ func main() {
 
 	// 设置 NotificationService 的 App 引用，用于发送事件到前端
 	notificationService.SetApp(app)
+	// 设置 UpdateService 的 App 引用，用于发送更新事件
+	updateService.SetApp(app)
 
 	app.OnShutdown(func() {
 		log.Println("🛑 应用正在关闭，停止后台服务...")
@@ -267,14 +238,10 @@ func main() {
 		healthCheckService.StopBackgroundPolling()
 		log.Println("✅ 健康检查服务已停止")
 
-		// 3. 停止更新定时器
-		updateService.StopDailyCheck()
-		log.Println("✅ 更新检查服务已停止")
-
-		// 4. 停止代理服务器
+		// 3. 停止代理服务器
 		_ = providerRelay.Stop()
 
-		// 5. 优雅关闭数据库写入队列（10秒超时，双队列架构）
+		// 4. 优雅关闭数据库写入队列（10秒超时，双队列架构）
 		if err := services.ShutdownGlobalDBQueue(10 * time.Second); err != nil {
 			log.Printf("⚠️ 队列关闭超时: %v", err)
 		} else {
@@ -570,400 +537,3 @@ func formatCurrency(value float64) string {
 	return fmt.Sprintf("$%.2f", value)
 }
 
-// ============================================================
-// 更新系统：启动恢复（全平台）和清理功能
-// ============================================================
-
-// checkAndRecoverFromFailedUpdate 检查并从失败的更新中恢复
-// 在主程序启动时调用，处理更新脚本崩溃或更新失败的情况
-// P1-7: 扩展支持 macOS 和 Linux
-func checkAndRecoverFromFailedUpdate() {
-	switch runtime.GOOS {
-	case "windows":
-		recoverWindowsUpdate()
-	case "darwin":
-		recoverDarwinUpdate()
-	case "linux":
-		recoverLinuxUpdate()
-	}
-}
-
-// recoverWindowsUpdate Windows 平台更新恢复
-func recoverWindowsUpdate() {
-	currentExe, err := os.Executable()
-	if err != nil {
-		return
-	}
-	currentExe, _ = filepath.EvalSymlinks(currentExe)
-	backupPath := currentExe + ".old"
-
-	// 检查备份文件是否存在
-	backupInfo, err := os.Stat(backupPath)
-	if err != nil {
-		return // 无备份，正常情况
-	}
-
-	log.Printf("[Recovery-Win] 检测到备份文件: %s (size=%d)", backupPath, backupInfo.Size())
-
-	// 检查当前 exe 是否可用（大小 > 1MB）
-	currentInfo, err := os.Stat(currentExe)
-	if err != nil {
-		// 当前 exe 不存在或无法访问，需要回滚
-		log.Printf("[Recovery-Win] 当前版本不可访问: %v，从备份恢复", err)
-		if err := os.Rename(backupPath, currentExe); err != nil {
-			log.Printf("[Recovery-Win] 回滚失败: %v", err)
-			log.Println("[Recovery-Win] 请手动将备份文件恢复为原文件名")
-		} else {
-			log.Println("[Recovery-Win] 回滚成功，已恢复到旧版本")
-		}
-		return
-	}
-
-	if currentInfo.Size() > 1024*1024 {
-		// 当前版本正常（>1MB），说明更新成功，清理备份
-		log.Println("[Recovery-Win] 更新成功，清理旧版本备份")
-		if err := os.Remove(backupPath); err != nil {
-			log.Printf("[Recovery-Win] 删除备份失败: %v", err)
-		}
-	} else {
-		// 当前版本损坏（<1MB），需要回滚
-		log.Printf("[Recovery-Win] 当前版本异常（size=%d < 1MB），从备份恢复", currentInfo.Size())
-		if err := os.Remove(currentExe); err != nil {
-			log.Printf("[Recovery-Win] 删除损坏文件失败: %v", err)
-		}
-		if err := os.Rename(backupPath, currentExe); err != nil {
-			log.Printf("[Recovery-Win] 回滚失败: %v", err)
-			log.Println("[Recovery-Win] 请手动将备份文件恢复为原文件名")
-		} else {
-			log.Println("[Recovery-Win] 回滚成功，已恢复到旧版本")
-		}
-	}
-}
-
-// recoverDarwinUpdate macOS 平台更新恢复
-func recoverDarwinUpdate() {
-	currentExe, err := os.Executable()
-	if err != nil {
-		return
-	}
-	currentExe, _ = filepath.EvalSymlinks(currentExe)
-
-	// 定位 .app 包路径
-	appPath := currentExe
-	for i := 0; i < 6; i++ {
-		if strings.HasSuffix(strings.ToLower(appPath), ".app") {
-			break
-		}
-		parent := filepath.Dir(appPath)
-		if parent == appPath {
-			break
-		}
-		appPath = parent
-	}
-	if !strings.HasSuffix(strings.ToLower(appPath), ".app") {
-		return // 无法定位 .app 包
-	}
-
-	backupPath := appPath + ".old"
-
-	// 检查备份是否存在
-	backupInfo, err := os.Stat(backupPath)
-	if err != nil {
-		return // 无备份，正常情况
-	}
-
-	log.Printf("[Recovery-Mac] 检测到备份应用包: %s", backupPath)
-
-	// 检查当前 .app 是否可用（目录存在且包含 Info.plist）
-	infoPlist := filepath.Join(appPath, "Contents", "Info.plist")
-	if _, err := os.Stat(infoPlist); err != nil {
-		// 当前 .app 损坏，需要回滚
-		log.Printf("[Recovery-Mac] 当前版本损坏（Info.plist 不存在），从备份恢复")
-		if err := os.RemoveAll(appPath); err != nil {
-			log.Printf("[Recovery-Mac] 删除损坏目录失败: %v", err)
-		}
-		if err := os.Rename(backupPath, appPath); err != nil {
-			log.Printf("[Recovery-Mac] 回滚失败: %v", err)
-			log.Println("[Recovery-Mac] 请手动将备份应用恢复为原名称")
-		} else {
-			log.Println("[Recovery-Mac] 回滚成功，已恢复到旧版本")
-		}
-		return
-	}
-
-	// 当前版本正常，清理备份
-	log.Println("[Recovery-Mac] 更新成功，清理旧版本备份")
-	if err := os.RemoveAll(backupPath); err != nil {
-		log.Printf("[Recovery-Mac] 删除备份失败: %v", err)
-	}
-	_ = backupInfo // 使用变量避免编译警告
-}
-
-// recoverLinuxUpdate Linux 平台更新恢复
-func recoverLinuxUpdate() {
-	currentExe, err := os.Executable()
-	if err != nil {
-		return
-	}
-
-	// AppImage 运行时 os.Executable() 返回 /tmp/.mount_* 内部路径
-	// 使用 APPIMAGE 环境变量获取真实路径
-	targetExe := currentExe
-	appimageEnv := strings.TrimSpace(os.Getenv("APPIMAGE"))
-	isAppImageMount := strings.Contains(currentExe, "/.mount_")
-
-	if isAppImageMount && appimageEnv != "" && filepath.IsAbs(appimageEnv) {
-		if !strings.Contains(appimageEnv, "/.mount_") {
-			if resolved, err := filepath.EvalSymlinks(appimageEnv); err == nil {
-				if !strings.Contains(resolved, "/.mount_") {
-					targetExe = resolved
-				}
-			}
-		}
-	} else {
-		targetExe, _ = filepath.EvalSymlinks(currentExe)
-	}
-
-	backupPath := targetExe + ".old"
-
-	// 检查备份文件是否存在
-	backupInfo, err := os.Stat(backupPath)
-	if err != nil {
-		return // 无备份，正常情况
-	}
-
-	log.Printf("[Recovery-Linux] 检测到备份文件: %s (size=%d)", backupPath, backupInfo.Size())
-
-	// 检查当前文件是否可用（大小 > 1MB 且为 ELF 格式）
-	currentInfo, err := os.Stat(targetExe)
-	if err != nil {
-		// 当前文件不存在，需要回滚
-		log.Printf("[Recovery-Linux] 当前版本不可访问: %v，从备份恢复", err)
-		if err := os.Rename(backupPath, targetExe); err != nil {
-			log.Printf("[Recovery-Linux] 回滚失败: %v", err)
-			log.Println("[Recovery-Linux] 请手动将备份文件恢复为原文件名")
-		} else {
-			log.Println("[Recovery-Linux] 回滚成功，已恢复到旧版本")
-		}
-		return
-	}
-
-	// 检查文件大小和 ELF magic
-	isValid := currentInfo.Size() > 1024*1024
-	if isValid {
-		f, err := os.Open(targetExe)
-		if err == nil {
-			magic := make([]byte, 4)
-			n, _ := f.Read(magic)
-			f.Close()
-			isValid = n == 4 && magic[0] == 0x7F && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F'
-		}
-	}
-
-	if isValid {
-		// 当前版本正常，清理备份
-		log.Println("[Recovery-Linux] 更新成功，清理旧版本备份")
-		if err := os.Remove(backupPath); err != nil {
-			log.Printf("[Recovery-Linux] 删除备份失败: %v", err)
-		}
-	} else {
-		// 当前版本损坏，需要回滚
-		log.Printf("[Recovery-Linux] 当前版本异常（size=%d 或非 ELF），从备份恢复", currentInfo.Size())
-		if err := os.Remove(targetExe); err != nil {
-			log.Printf("[Recovery-Linux] 删除损坏文件失败: %v", err)
-		}
-		if err := os.Rename(backupPath, targetExe); err != nil {
-			log.Printf("[Recovery-Linux] 回滚失败: %v", err)
-			log.Println("[Recovery-Linux] 请手动将备份文件恢复为原文件名")
-		} else {
-			log.Println("[Recovery-Linux] 回滚成功，已恢复到旧版本")
-		}
-	}
-}
-
-// cleanupStalePendingUpdate 清理残留的 pending 文件
-// P1-5 加固：处理更新脚本崩溃但更新实际成功的情况
-// 场景：脚本成功替换文件并重启应用，但在清理 pending 前崩溃
-func cleanupStalePendingUpdate() {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return
-	}
-
-	pendingFile := filepath.Join(home, ".code-switch", ".pending-update")
-
-	// 检查 pending 文件是否存在
-	data, err := os.ReadFile(pendingFile)
-	if err != nil {
-		return // 无 pending 文件，正常情况
-	}
-
-	// 解析 pending 文件获取版本
-	var metadata map[string]interface{}
-	if err := json.Unmarshal(data, &metadata); err != nil {
-		// 无法解析，删除损坏的 pending 文件
-		log.Printf("[Cleanup-Pending] 无法解析 pending 文件，删除: %s", pendingFile)
-		os.Remove(pendingFile)
-		return
-	}
-
-	pendingVersion, ok := metadata["version"].(string)
-	if !ok || pendingVersion == "" {
-		// 无版本信息，删除
-		log.Printf("[Cleanup-Pending] pending 文件缺少版本信息，删除: %s", pendingFile)
-		os.Remove(pendingFile)
-		return
-	}
-
-	// 比较版本：如果当前版本 >= pending 版本，说明更新已成功
-	// 使用简单字符串比较（版本号格式为 vX.Y.Z）
-	// 如果当前版本等于或高于 pending 版本，说明更新成功但脚本没有清理
-	currentVersion := AppVersion
-	if currentVersion == pendingVersion || versionGreaterOrEqual(currentVersion, pendingVersion) {
-		log.Printf("[Cleanup-Pending] 检测到残留 pending（当前=%s，pending=%s），更新已成功，清理残留", currentVersion, pendingVersion)
-		if err := os.Remove(pendingFile); err != nil {
-			log.Printf("[Cleanup-Pending] 删除 pending 文件失败: %v", err)
-		} else {
-			log.Println("[Cleanup-Pending] 已清理残留 pending 文件")
-		}
-		return
-	}
-
-	// 当前版本 < pending 版本，说明更新尚未完成（可能是重启后待安装）
-	// 不删除 pending，让 ApplyUpdate() 处理
-	log.Printf("[Cleanup-Pending] 检测到待安装更新（当前=%s，pending=%s），保留 pending", currentVersion, pendingVersion)
-}
-
-// versionGreaterOrEqual 比较版本号（简化实现，假设格式为 vX.Y.Z）
-func versionGreaterOrEqual(current, target string) bool {
-	// 移除 v 前缀
-	current = strings.TrimPrefix(current, "v")
-	target = strings.TrimPrefix(target, "v")
-
-	// 分割版本号
-	currentParts := strings.Split(current, ".")
-	targetParts := strings.Split(target, ".")
-
-	// 比较各部分
-	for i := 0; i < len(currentParts) && i < len(targetParts); i++ {
-		c, _ := strconv.Atoi(currentParts[i])
-		t, _ := strconv.Atoi(targetParts[i])
-		if c > t {
-			return true
-		}
-		if c < t {
-			return false
-		}
-	}
-
-	// 如果前面都相等，比较长度
-	return len(currentParts) >= len(targetParts)
-}
-
-// cleanupOldFiles 清理更新过程中的残留文件
-// 在主程序启动时调用 - 支持所有平台
-func cleanupOldFiles() {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return
-	}
-
-	updateDir := filepath.Join(home, ".code-switch", "updates")
-	if _, err := os.Stat(updateDir); os.IsNotExist(err) {
-		return // 更新目录不存在
-	}
-
-	log.Printf("[Cleanup] 开始清理更新目录: %s", updateDir)
-
-	// 1. 清理超过 7 天的 .old 备份文件（所有平台通用）
-	cleanupByAge(updateDir, ".old", 7*24*time.Hour)
-
-	// 2. 按平台清理旧版本下载文件
-	switch runtime.GOOS {
-	case "windows":
-		cleanupByCount(updateDir, "CodeSwitch*.exe", 1)
-		cleanupByCount(updateDir, "updater*.exe", 1)
-	case "linux":
-		cleanupByCount(updateDir, "CodeSwitch*.AppImage", 1)
-	case "darwin":
-		cleanupByCount(updateDir, "codeswitch-macos-*.zip", 1)
-	}
-
-	// 3. 清理旧日志（保留最近 5 个，或总大小 < 5MB）- 所有平台通用
-	cleanupLogs(updateDir, 5, 5*1024*1024)
-
-	log.Println("[Cleanup] 清理完成")
-}
-
-// cleanupByAge 按时间清理文件
-func cleanupByAge(dir, suffix string, maxAge time.Duration) {
-	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return nil
-		}
-		if strings.HasSuffix(path, suffix) && time.Since(info.ModTime()) > maxAge {
-			log.Printf("[Cleanup] 删除过期文件: %s (age=%v)", path, time.Since(info.ModTime()).Round(time.Hour))
-			os.Remove(path)
-		}
-		return nil
-	})
-}
-
-// cleanupByCount 按数量清理（保留最新 N 个）
-func cleanupByCount(dir, pattern string, keepCount int) {
-	matches, err := filepath.Glob(filepath.Join(dir, pattern))
-	if err != nil || len(matches) <= keepCount {
-		return
-	}
-
-	// 按修改时间排序（新→旧）
-	sort.Slice(matches, func(i, j int) bool {
-		infoI, _ := os.Stat(matches[i])
-		infoJ, _ := os.Stat(matches[j])
-		if infoI == nil || infoJ == nil {
-			return false
-		}
-		return infoI.ModTime().After(infoJ.ModTime())
-	})
-
-	// 删除多余的旧文件
-	for _, path := range matches[keepCount:] {
-		log.Printf("[Cleanup] 删除旧版本: %s", path)
-		os.Remove(path)
-	}
-}
-
-// cleanupLogs 日志清理（数量 + 大小双重限制）
-func cleanupLogs(dir string, maxCount int, maxTotalSize int64) {
-	pattern := filepath.Join(dir, "update*.log")
-	matches, err := filepath.Glob(pattern)
-	if err != nil || len(matches) == 0 {
-		return
-	}
-
-	// 按修改时间排序（新→旧）
-	sort.Slice(matches, func(i, j int) bool {
-		infoI, _ := os.Stat(matches[i])
-		infoJ, _ := os.Stat(matches[j])
-		if infoI == nil || infoJ == nil {
-			return false
-		}
-		return infoI.ModTime().After(infoJ.ModTime())
-	})
-
-	var totalSize int64
-	for i, path := range matches {
-		info, err := os.Stat(path)
-		if err != nil {
-			continue
-		}
-
-		// 超过数量限制或大小限制，删除
-		if i >= maxCount || totalSize+info.Size() > maxTotalSize {
-			log.Printf("[Cleanup] 删除旧日志: %s (size=%d)", path, info.Size())
-			os.Remove(path)
-		} else {
-			totalSize += info.Size()
-		}
-	}
-}

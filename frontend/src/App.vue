@@ -41,7 +41,7 @@ const isTray = computed(() => route.path === '/tray')
         </keep-alive>
       </RouterView>
     </main>
-    <!-- 更新通知弹窗 -->
+    <!-- 全局更新通知 -->
     <UpdateNotification />
   </div>
 </template>

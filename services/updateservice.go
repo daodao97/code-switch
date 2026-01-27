@@ -2,2445 +2,1563 @@ package services
 
 import (
 	"archive/zip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/hashicorp/go-version"
+	"github.com/wailsapp/wails/v3/pkg/application"
+	"golang.org/x/sync/singleflight"
 )
 
-// ErrUACDenied 表示用户取消或拒绝 UAC 提权
-var ErrUACDenied = errors.New("ERR_UAC_DENIED")
+// ==================== 状态定义 ====================
+
+// UpdateState 更新状态枚举
+type UpdateState string
+
+const (
+	StateIdle        UpdateState = "idle"        // 空闲，无更新任务
+	StateChecking    UpdateState = "checking"    // 正在检查更新
+	StateAvailable   UpdateState = "available"   // 有可用更新
+	StateDownloading UpdateState = "downloading" // 正在下载
+	StateReady       UpdateState = "ready"       // 下载完成，待安装
+	StateApplying    UpdateState = "applying"    // 正在应用更新
+	StateError       UpdateState = "error"       // 发生错误
+)
+
+// UpdatePolicy 更新策略
+type UpdatePolicy string
+
+const (
+	PolicyAuto      UpdatePolicy = "auto"      // 自动检测（默认）
+	PolicyPortable  UpdatePolicy = "portable"  // 便携版：自替换
+	PolicyInstaller UpdatePolicy = "installer" // 安装版：下载安装器
+)
+
+// ==================== 数据结构 ====================
 
 // UpdateInfo 更新信息
 type UpdateInfo struct {
-	Available    bool   `json:"available"`
-	Version      string `json:"version"`
-	DownloadURL  string `json:"download_url"`
-	ReleaseNotes string `json:"release_notes"`
-	FileSize     int64  `json:"file_size"`
-	SHA256       string `json:"sha256"`
+	Version     string    `json:"version"`
+	PubDate     time.Time `json:"pub_date"`
+	Notes       string    `json:"notes"`
+	DownloadURL string    `json:"download_url"`
+	SHA256      string    `json:"sha256"`
+	Size        int64     `json:"size"`
 }
 
-// UpdateState 更新状态
-type UpdateState struct {
-	LastCheckTime       time.Time `json:"last_check_time"`
-	LastCheckSuccess    bool      `json:"last_check_success"`
-	ConsecutiveFailures int       `json:"consecutive_failures"`
-	LatestKnownVersion  string    `json:"latest_known_version"`
-	DownloadProgress    float64   `json:"download_progress"`
-	UpdateReady         bool      `json:"update_ready"`
-	AutoCheckEnabled    bool      `json:"auto_check_enabled"` // 新增：持久化自动检查开关
+// LatestManifest latest.json 清单格式
+type LatestManifest struct {
+	Version   string                     `json:"version"`
+	PubDate   time.Time                  `json:"pub_date"`
+	Notes     string                     `json:"notes"`
+	Platforms map[string]PlatformRelease `json:"platforms"`
 }
 
-// UpdateService 更新服务
-type UpdateService struct {
-	currentVersion   string
-	latestVersion    string
-	downloadURL      string
-	updateFilePath   string
-	autoCheckEnabled bool
-	downloadProgress float64
-	dailyCheckTimer  *time.Timer
-	lastCheckTime    time.Time
-	checkFailures    int
-	updateReady      bool
-	isPortable       bool // 是否为便携版
-	mu               sync.Mutex
-	stateFile        string
-	updateDir        string
-	lockFile         string // 更新锁文件路径
-
-	// 保存最新检查到的更新信息（含 SHA256）
-	latestUpdateInfo *UpdateInfo
-}
-
-// GitHubRelease GitHub Release 结构
-type GitHubRelease struct {
-	TagName string `json:"tag_name"`
-	Body    string `json:"body"`
-	Assets  []struct {
-		Name               string `json:"name"`
-		BrowserDownloadURL string `json:"browser_download_url"`
-		Size               int64  `json:"size"`
-	} `json:"assets"`
-}
-
-// LatestRelease 静态元数据文件结构（latest.json）
-type LatestRelease struct {
-	Version     string                   `json:"version"`
-	ReleaseDate string                   `json:"release_date"`
-	Files       map[string]PlatformAsset `json:"files"`
-}
-
-// PlatformAsset 平台资产信息
-type PlatformAsset struct {
-	Name   string `json:"name"`
+// PlatformRelease 平台发布信息
+type PlatformRelease struct {
 	URL    string `json:"url"`
-	SHA256 string `json:"sha256,omitempty"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+
+// DownloadState 断点续传状态
+type DownloadState struct {
+	URL             string `json:"url"`
+	ExpectedSHA256  string `json:"expected_sha256"`
+	ExpectedSize    int64  `json:"expected_size"`
+	ETag            string `json:"etag"`
+	LastModified    string `json:"last_modified"`
+	DownloadedBytes int64  `json:"downloaded_bytes"`
+	TempFilePath    string `json:"temp_file_path"`
+}
+
+// PendingApply 待应用更新标记
+type PendingApply struct {
+	TargetVersion string    `json:"target_version"`
+	Method        string    `json:"method"` // "swap" | "installer"
+	FilePath      string    `json:"file_path"`
+	FileSHA256    string    `json:"file_sha256"`
+	StartedAt     time.Time `json:"started_at"`
+}
+
+// UpdateStateSnapshot 状态快照（返回给前端）
+type UpdateStateSnapshot struct {
+	State           UpdateState `json:"state"`
+	CurrentVersion  string      `json:"current_version"`
+	LatestVersion   string      `json:"latest_version,omitempty"`
+	Notes           string      `json:"notes,omitempty"`
+	DownloadURL     string      `json:"download_url,omitempty"`
+	DownloadedBytes int64       `json:"downloaded_bytes"`
+	TotalBytes      int64       `json:"total_bytes"`
+	Progress        float64     `json:"progress"` // 0-100
+	Error           string      `json:"error,omitempty"`
+	ErrorOp         string      `json:"error_op,omitempty"` // "check" | "download" | "apply"
+	Policy          string      `json:"policy"`
+}
+
+// ==================== 服务定义 ====================
+
+// UpdateService 自动更新服务
+type UpdateService struct {
+	mu sync.Mutex
+
+	// 状态
+	state           UpdateState
+	currentVersion  string
+	targetInfo      *UpdateInfo // 当前更新目标
+	downloadState   *DownloadState
+	downloadedBytes int64
+	totalBytes      int64
+	lastError       string
+	errorOp         string // "check" | "download" | "apply"
+
+	// 忽略的版本
+	dismissedVersion string
+
+	// 事件发送
+	app *application.App
+
+	// 并发控制
+	checkGroup  singleflight.Group
+	cancelFunc  context.CancelFunc
+	downloadCtx context.Context
+
+	// 进度事件节流
+	lastEmitTime    time.Time
+	lastEmitPercent int
+	lastEmitState   UpdateState
+
+	// 配置
+	dataDir      string // 数据目录，用于存储临时文件和状态
+	cachedPolicy string // 缓存的更新策略，避免重复检测
+}
+
+// 常量
+const (
+	latestJSONURL     = "https://github.com/Rogers-F/code-switch-R/releases/latest/download/latest.json"
+	githubAPIURL      = "https://api.github.com/repos/Rogers-F/code-switch-R/releases/latest"
+	checkCooldown     = 60 * time.Second // 检查更新冷却时间
+	progressThrottle  = 100 * time.Millisecond
+	progressMinChange = 1 // 最小进度变化（百分比）
+)
+
+// URL 白名单
+var allowedURLPrefixes = []string{
+	"https://github.com/Rogers-F/code-switch-R/releases/download/",
+	"https://github.com/Rogers-F/code-switch-R/releases/latest/download/",
+	"https://objects.githubusercontent.com/", // GitHub 重定向目标
 }
 
 // NewUpdateService 创建更新服务
 func NewUpdateService(currentVersion string) *UpdateService {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = "."
-	}
+	dataDir := getUpdateDataDir()
 
-	updateDir := filepath.Join(home, ".code-switch", "updates")
-	stateFile := filepath.Join(home, ".code-switch", "update-state.json")
+	// 确保数据目录存在
+	os.MkdirAll(dataDir, 0755)
 
 	us := &UpdateService{
-		currentVersion:   currentVersion,
-		autoCheckEnabled: true, // 默认开启自动检查
-		isPortable:       detectPortableMode(),
-		updateDir:        updateDir,
-		stateFile:        stateFile,
+		state:          StateIdle,
+		currentVersion: currentVersion,
+		dataDir:        dataDir,
 	}
 
-	// 创建更新目录
-	_ = os.MkdirAll(updateDir, 0o755)
-
-	// P1-2 修复：加载状态时记录错误（不阻止启动，但提供可观测性）
-	if err := us.LoadState(); err != nil {
-		log.Printf("[UpdateService] ⚠️ 加载状态失败（将使用默认值）: %v", err)
+	// 读取已忽略的版本
+	dismissPath := filepath.Join(dataDir, "dismissed_version.txt")
+	if data, err := os.ReadFile(dismissPath); err == nil {
+		us.dismissedVersion = strings.TrimSpace(string(data))
 	}
 
-	log.Printf("[UpdateService] 运行模式: %s", func() string {
-		if us.isPortable {
-			return "便携版"
-		}
-		return "安装版"
-	}())
+	// 初始化时检测并缓存更新策略（只做一次 I/O）
+	us.cachedPolicy = string(us.detectPolicy())
+
+	// 启动时检查是否有待应用的更新
+	us.checkPendingApply()
 
 	return us
 }
 
-// detectPortableMode 检测是否为便携版
-// 采用写权限检测方式：如果能在 exe 所在目录创建文件，则为便携版
-func detectPortableMode() bool {
-	if runtime.GOOS != "windows" {
-		return false // 非 Windows 默认不是便携版
-	}
-
-	exePath, err := os.Executable()
-	if err != nil {
-		return false
-	}
-	exePath, _ = filepath.EvalSymlinks(exePath)
-	exeDir := filepath.Dir(exePath)
-
-	// 直接检测写权限（比路径匹配更准确）
-	// 如果能在 exe 所在目录创建文件，则为便携版
-	testFile := filepath.Join(exeDir, fmt.Sprintf(".write-test-%d", os.Getpid()))
-	f, err := os.Create(testFile)
-	if err != nil {
-		// 无写权限，视为安装版（需要 UAC）
-		log.Printf("[Update] 检测为安装版: 无法写入 %s", exeDir)
-		return false
-	}
-	f.Close()
-	os.Remove(testFile)
-
-	log.Printf("[Update] 检测为便携版: 可写入 %s", exeDir)
-	return true
+// SetApp 设置 Wails App 引用
+func (us *UpdateService) SetApp(app *application.App) {
+	us.app = app
 }
 
-// CheckUpdate 检查更新（带网络容错）
-// 优先使用静态文件方式（无限流），失败后 fallback 到 GitHub API
-func (us *UpdateService) CheckUpdate() (*UpdateInfo, error) {
-	log.Printf("[UpdateService] 开始检查更新，当前版本: %s", us.currentVersion)
+// ==================== 公开 API ====================
 
-	// 1. 优先尝试静态文件方式（无限流）
-	info, err := us.checkUpdateViaStaticFile()
-	if err == nil {
+// CheckUpdate 检查更新
+// 返回更新信息，如果无更新则返回 nil
+func (us *UpdateService) CheckUpdate() (*UpdateInfo, error) {
+	us.mu.Lock()
+	// 如果已在下载/准备/应用状态，不覆盖当前目标
+	if us.state == StateDownloading || us.state == StateReady || us.state == StateApplying {
+		info := us.targetInfo
+		us.mu.Unlock()
 		return info, nil
 	}
-	log.Printf("[UpdateService] 静态文件检查失败: %v，尝试 API fallback", err)
+	us.state = StateChecking
+	us.mu.Unlock()
 
-	// 2. Fallback 到 GitHub API（保留兼容性）
-	return us.checkUpdateViaAPI()
+	// 使用 singleflight 防止并发重复检查
+	result, err, _ := us.checkGroup.Do("check", func() (interface{}, error) {
+		return us.doCheckUpdate()
+	})
+
+	us.mu.Lock()
+	defer us.mu.Unlock()
+
+	if err != nil {
+		us.state = StateError
+		us.lastError = err.Error()
+		us.errorOp = "check"
+		us.emitState()
+		return nil, err
+	}
+
+	info, ok := result.(*UpdateInfo)
+	if !ok || info == nil {
+		us.state = StateIdle
+		us.emitState()
+		return nil, nil
+	}
+
+	// 检查是否被忽略
+	if us.dismissedVersion == info.Version {
+		us.state = StateIdle
+		us.emitState()
+		return nil, nil
+	}
+
+	// 检查是否需要更新
+	if !us.isNewerVersion(info.Version) {
+		us.state = StateIdle
+		us.emitState()
+		return nil, nil
+	}
+
+	us.targetInfo = info
+	us.totalBytes = info.Size
+	us.state = StateAvailable
+	us.emitState()
+
+	return info, nil
 }
 
-// checkUpdateViaStaticFile 通过静态文件检查更新（无限流）
-func (us *UpdateService) checkUpdateViaStaticFile() (*UpdateInfo, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
+// DownloadUpdate 下载更新
+func (us *UpdateService) DownloadUpdate() error {
+	us.mu.Lock()
 
-	// 直接下载静态文件，不调用 API，无限流风险
-	staticURL := "https://github.com/Rogers-F/code-switch-R/releases/latest/download/latest.json"
+	switch us.state {
+	case StateDownloading:
+		// 幂等：已在下载，直接返回
+		us.mu.Unlock()
+		return nil
+	case StateReady:
+		// 幂等：已下载完成
+		us.mu.Unlock()
+		return nil
+	case StateAvailable:
+		// 可以开始下载
+	case StateError:
+		if us.errorOp == "download" && us.targetInfo != nil {
+			// 可以重试下载
+		} else {
+			us.mu.Unlock()
+			return fmt.Errorf("invalid state for download: %s", us.state)
+		}
+	default:
+		us.mu.Unlock()
+		return fmt.Errorf("invalid state for download: %s (expected: available)", us.state)
+	}
 
-	log.Printf("[UpdateService] 请求静态文件: %s", staticURL)
+	if us.targetInfo == nil {
+		us.mu.Unlock()
+		return fmt.Errorf("no update target set")
+	}
 
-	resp, err := client.Get(staticURL)
+	// P0: SHA256 必须存在（fallback 无 SHA 时拒绝自动下载）
+	if us.targetInfo.SHA256 == "" {
+		us.state = StateError
+		us.lastError = "SHA256 checksum not available. Please download manually from GitHub Releases."
+		us.errorOp = "download"
+		us.emitState()
+		us.mu.Unlock()
+		return fmt.Errorf("SHA256 checksum required for automatic download")
+	}
+
+	// 验证 URL 白名单
+	if !isURLAllowed(us.targetInfo.DownloadURL) {
+		us.mu.Unlock()
+		return fmt.Errorf("download URL not in whitelist: %s", us.targetInfo.DownloadURL)
+	}
+
+	us.state = StateDownloading
+	us.lastError = ""
+	us.errorOp = ""
+	us.emitState() // P0: emit downloading 状态
+
+	// 创建取消上下文
+	ctx, cancel := context.WithCancel(context.Background())
+	us.cancelFunc = cancel
+	us.downloadCtx = ctx
+
+	targetInfo := us.targetInfo
+	us.mu.Unlock()
+
+	// 异步下载
+	go us.doDownload(ctx, targetInfo)
+
+	return nil
+}
+
+// CancelDownload 取消下载
+func (us *UpdateService) CancelDownload() error {
+	us.mu.Lock()
+	defer us.mu.Unlock()
+
+	if us.state != StateDownloading {
+		return fmt.Errorf("not downloading")
+	}
+
+	if us.cancelFunc != nil {
+		us.cancelFunc()
+	}
+
+	us.state = StateAvailable
+	us.emitState()
+
+	return nil
+}
+
+// RequestRestart 请求重启并更新
+func (us *UpdateService) RequestRestart() error {
+	us.mu.Lock()
+
+	if us.state != StateReady {
+		us.mu.Unlock()
+		return fmt.Errorf("invalid state for restart: %s (expected: ready)", us.state)
+	}
+
+	if us.downloadState == nil || us.targetInfo == nil {
+		us.mu.Unlock()
+		return fmt.Errorf("no downloaded update")
+	}
+
+	us.state = StateApplying
+	downloadState := us.downloadState
+	targetInfo := us.targetInfo
+	us.mu.Unlock()
+
+	// 写入 pending_apply.json
+	policy := us.detectPolicy()
+	method := "swap"
+	if policy == PolicyInstaller {
+		method = "installer"
+	}
+
+	pending := &PendingApply{
+		TargetVersion: targetInfo.Version,
+		Method:        method,
+		FilePath:      downloadState.TempFilePath,
+		FileSHA256:    downloadState.ExpectedSHA256,
+		StartedAt:     time.Now(),
+	}
+
+	pendingPath := filepath.Join(us.dataDir, "pending_apply.json")
+	data, err := json.MarshalIndent(pending, "", "  ")
 	if err != nil {
-		return nil, fmt.Errorf("下载元数据失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-
-	var release LatestRelease
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return nil, fmt.Errorf("解析元数据失败: %w", err)
+		us.mu.Lock()
+		us.state = StateError
+		us.lastError = fmt.Sprintf("failed to marshal pending apply: %v", err)
+		us.errorOp = "apply"
+		us.mu.Unlock()
+		us.emitStateUnlocked() // P1: 错误路径补发状态事件
+		return err
 	}
 
-	log.Printf("[UpdateService] 最新版本（静态文件）: %s", release.Version)
+	if err := os.WriteFile(pendingPath, data, 0644); err != nil {
+		us.mu.Lock()
+		us.state = StateError
+		us.lastError = fmt.Sprintf("failed to write pending apply: %v", err)
+		us.errorOp = "apply"
+		us.mu.Unlock()
+		us.emitStateUnlocked() // P1: 错误路径补发状态事件
+		return err
+	}
 
-	// 版本比较
-	needUpdate, err := us.compareVersions(us.currentVersion, release.Version)
+	// 启动更新脚本
+	if err := us.launchUpdater(pending); err != nil {
+		us.mu.Lock()
+		us.state = StateError
+		us.lastError = fmt.Sprintf("failed to launch updater: %v", err)
+		us.errorOp = "apply"
+		us.mu.Unlock()
+		us.emitStateUnlocked() // P1: 错误路径补发状态事件
+		return err
+	}
+
+	// 通知前端准备退出
+	us.emitStateUnlocked() // P1: 改用 emitStateUnlocked（未持锁）
+
+	// P0: 退出应用，让更新脚本接管
+	if us.app != nil {
+		us.app.Quit()
+	}
+
+	return nil
+}
+
+// GetState 获取当前状态快照
+func (us *UpdateService) GetState() *UpdateStateSnapshot {
+	us.mu.Lock()
+	defer us.mu.Unlock()
+
+	policy := us.cachedPolicy
+	if policy == "" {
+		policy = "auto"
+	}
+
+	snapshot := &UpdateStateSnapshot{
+		State:           us.state,
+		CurrentVersion:  us.currentVersion,
+		DownloadedBytes: us.downloadedBytes,
+		TotalBytes:      us.totalBytes,
+		Error:           us.lastError,
+		ErrorOp:         us.errorOp,
+		Policy:          policy,
+	}
+
+	if us.targetInfo != nil {
+		snapshot.LatestVersion = us.targetInfo.Version
+		snapshot.Notes = us.targetInfo.Notes
+		snapshot.DownloadURL = us.targetInfo.DownloadURL
+	}
+
+	if us.totalBytes > 0 {
+		snapshot.Progress = float64(us.downloadedBytes) / float64(us.totalBytes) * 100
+	}
+
+	return snapshot
+}
+
+// DismissUpdate 忽略指定版本
+func (us *UpdateService) DismissUpdate(version string) error {
+	us.mu.Lock()
+
+	if us.state == StateDownloading || us.state == StateReady || us.state == StateApplying {
+		us.mu.Unlock()
+		return fmt.Errorf("cannot dismiss while downloading/ready/applying")
+	}
+
+	us.dismissedVersion = version
+	us.state = StateIdle
+	us.targetInfo = nil
+	us.mu.Unlock()
+
+	// 持久化到本地存储（无需持锁）
+	dismissPath := filepath.Join(us.dataDir, "dismissed_version.txt")
+	_ = os.WriteFile(dismissPath, []byte(version), 0644)
+
+	// 发送状态事件（无需持锁）
+	us.emitStateUnlocked()
+
+	return nil
+}
+
+// GetDismissedVersion 获取被忽略的版本
+func (us *UpdateService) GetDismissedVersion() string {
+	us.mu.Lock()
+	defer us.mu.Unlock()
+	return us.dismissedVersion
+}
+
+// ==================== 内部方法 ====================
+
+// doCheckUpdate 执行检查更新
+func (us *UpdateService) doCheckUpdate() (*UpdateInfo, error) {
+	// 首先尝试从 latest.json 获取
+	info, err := us.fetchFromLatestJSON()
+	if err == nil && info != nil {
+		return info, nil
+	}
+
+	// Fallback: 从 GitHub API 获取
+	return us.fetchFromGitHubAPI()
+}
+
+// fetchFromLatestJSON 从 latest.json 获取更新信息
+func (us *UpdateService) fetchFromLatestJSON() (*UpdateInfo, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", latestJSONURL, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	if needUpdate {
-		log.Printf("[UpdateService] ✅ 发现新版本: %s → %s", us.currentVersion, release.Version)
-	} else {
-		log.Printf("[UpdateService] ✅ 已是最新版本: %s", us.currentVersion)
-	}
-
-	// 查找当前平台的资产
-	platformKey := us.getPlatformKey()
-	asset, ok := release.Files[platformKey]
-	if !ok {
-		return nil, fmt.Errorf("未找到平台 %s 的安装包", platformKey)
-	}
-
-	log.Printf("[UpdateService] 下载链接（静态文件）: %s", asset.URL)
-	if asset.SHA256 != "" {
-		log.Printf("[UpdateService] SHA256: %s", asset.SHA256)
-	}
-
-	updateInfo := &UpdateInfo{
-		Available:   needUpdate,
-		Version:     release.Version,
-		DownloadURL: asset.URL,
-		SHA256:      asset.SHA256,
-	}
-
-	us.mu.Lock()
-	us.latestVersion = release.Version
-	us.downloadURL = asset.URL
-	us.latestUpdateInfo = updateInfo
-	us.mu.Unlock()
-
-	return updateInfo, nil
-}
-
-// getPlatformKey 获取当前平台的 key（用于 latest.json 的 files map）
-func (us *UpdateService) getPlatformKey() string {
-	switch runtime.GOOS {
-	case "windows":
-		return "windows"
-	case "darwin":
-		if runtime.GOARCH == "arm64" {
-			return "darwin-arm64"
-		}
-		return "darwin-amd64"
-	case "linux":
-		return "linux"
-	default:
-		return runtime.GOOS
-	}
-}
-
-// checkUpdateViaAPI 通过 GitHub API 检查更新（fallback，有限流风险）
-func (us *UpdateService) checkUpdateViaAPI() (*UpdateInfo, error) {
-	client := &http.Client{
-		Timeout: 15 * time.Second,
-	}
-
-	releaseURL := "https://api.github.com/repos/Rogers-F/code-switch-R/releases/latest"
-
-	req, err := http.NewRequest("GET", releaseURL, nil)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Printf("[UpdateService] ❌ 创建请求失败: %v", err)
-		return nil, fmt.Errorf("创建请求失败: %w", err)
-	}
-
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "CodeSwitch/"+us.currentVersion)
-
-	log.Printf("[UpdateService] 请求 GitHub API: %s", releaseURL)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[UpdateService] ❌ GitHub API 不可达: %v", err)
-		return nil, fmt.Errorf("GitHub API 不可达: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		log.Printf("[UpdateService] ❌ GitHub API 返回错误状态码: %d", resp.StatusCode)
-		return nil, fmt.Errorf("GitHub API 返回错误状态码: %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("latest.json returned status %d", resp.StatusCode)
 	}
 
-	var release GitHubRelease
+	var manifest LatestManifest
+	if err := json.NewDecoder(resp.Body).Decode(&manifest); err != nil {
+		return nil, fmt.Errorf("failed to decode latest.json: %w", err)
+	}
+
+	// 获取当前平台的发布信息
+	platformKey := us.getPlatformKey()
+	release, ok := manifest.Platforms[platformKey]
+	if !ok {
+		return nil, fmt.Errorf("no release for platform: %s", platformKey)
+	}
+
+	return &UpdateInfo{
+		Version:     manifest.Version,
+		PubDate:     manifest.PubDate,
+		Notes:       manifest.Notes,
+		DownloadURL: release.URL,
+		SHA256:      release.SHA256,
+		Size:        release.Size,
+	}, nil
+}
+
+// fetchFromGitHubAPI 从 GitHub API 获取更新信息（Fallback）
+func (us *UpdateService) fetchFromGitHubAPI() (*UpdateInfo, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", githubAPIURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
+	}
+
+	var release struct {
+		TagName     string    `json:"tag_name"`
+		PublishedAt time.Time `json:"published_at"`
+		Body        string    `json:"body"`
+		Assets      []struct {
+			Name               string `json:"name"`
+			BrowserDownloadURL string `json:"browser_download_url"`
+			Size               int64  `json:"size"`
+		} `json:"assets"`
+	}
+
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		log.Printf("[UpdateService] ❌ 解析响应失败: %v", err)
-		return nil, fmt.Errorf("解析响应失败: %w", err)
+		return nil, fmt.Errorf("failed to decode GitHub API response: %w", err)
 	}
 
-	log.Printf("[UpdateService] 最新版本: %s", release.TagName)
+	// 查找当前平台的资产
+	assetName := us.getAssetName(release.TagName)
+	var downloadURL string
+	var size int64
 
-	// 比较版本号
-	needUpdate, err := us.compareVersions(us.currentVersion, release.TagName)
-	if err != nil {
-		log.Printf("[UpdateService] ❌ 版本比较失败: %v (current=%s, latest=%s)", err, us.currentVersion, release.TagName)
-		return nil, fmt.Errorf("版本比较失败: %w", err)
-	}
-
-	if needUpdate {
-		log.Printf("[UpdateService] ✅ 发现新版本: %s → %s", us.currentVersion, release.TagName)
-	} else {
-		log.Printf("[UpdateService] ✅ 已是最新版本: %s", us.currentVersion)
-	}
-
-	// 查找当前平台的下载链接
-	downloadURL := us.findPlatformAsset(release.Assets)
-	if downloadURL == "" {
-		log.Printf("[UpdateService] ❌ 未找到适用于 %s 的安装包", runtime.GOOS)
-		return nil, fmt.Errorf("未找到适用于 %s 的安装包", runtime.GOOS)
-	}
-
-	log.Printf("[UpdateService] 下载链接: %s", downloadURL)
-
-	// 查找对应的 SHA256 校验文件
-	sha256Hash := us.findSHA256ForAsset(release.Assets, downloadURL)
-	if sha256Hash != "" {
-		log.Printf("[UpdateService] SHA256: %s", sha256Hash)
-	}
-
-	updateInfo := &UpdateInfo{
-		Available:    needUpdate,
-		Version:      release.TagName,
-		DownloadURL:  downloadURL,
-		ReleaseNotes: release.Body,
-		SHA256:       sha256Hash,
-	}
-
-	us.mu.Lock()
-	us.latestVersion = release.TagName
-	us.downloadURL = downloadURL
-	us.latestUpdateInfo = updateInfo // 保存更新信息
-	us.mu.Unlock()
-
-	return updateInfo, nil
-}
-
-// compareVersions 比较版本号
-func (us *UpdateService) compareVersions(current, latest string) (bool, error) {
-	currentVer, err := version.NewVersion(current)
-	if err != nil {
-		return false, fmt.Errorf("解析当前版本失败: %w", err)
-	}
-
-	latestVer, err := version.NewVersion(latest)
-	if err != nil {
-		return false, fmt.Errorf("解析最新版本失败: %w", err)
-	}
-
-	return latestVer.GreaterThan(currentVer), nil
-}
-
-// findPlatformAsset 查找当前平台的下载链接
-func (us *UpdateService) findPlatformAsset(assets []struct {
-	Name               string `json:"name"`
-	BrowserDownloadURL string `json:"browser_download_url"`
-	Size               int64  `json:"size"`
-}) string {
-	var targetName string
-	switch runtime.GOOS {
-	case "windows":
-		// 统一下载核心 exe（无论便携版还是安装版）
-		// 安装版通过 updater.exe 提权替换
-		targetName = "CodeSwitch.exe"
-	case "darwin":
-		if runtime.GOARCH == "arm64" {
-			targetName = "codeswitch-macos-arm64.zip"
-		} else {
-			targetName = "codeswitch-macos-amd64.zip"
-		}
-	case "linux":
-		targetName = "CodeSwitch.AppImage"
-	default:
-		return ""
-	}
-
-	// 精确匹配文件名
-	for _, asset := range assets {
-		if asset.Name == targetName {
-			log.Printf("[UpdateService] 找到更新文件: %s (模式: %s)", targetName, func() string {
-				if us.isPortable {
-					return "便携版"
-				}
-				return "安装版"
-			}())
-			return asset.BrowserDownloadURL
-		}
-	}
-
-	log.Printf("[UpdateService] 未找到适配文件 %s", targetName)
-	return ""
-}
-
-// findSHA256ForAsset 查找资产对应的 SHA256 哈希
-// SHA256 文件格式：<hash>  <filename> 或 <hash> <filename>
-func (us *UpdateService) findSHA256ForAsset(assets []struct {
-	Name               string `json:"name"`
-	BrowserDownloadURL string `json:"browser_download_url"`
-	Size               int64  `json:"size"`
-}, assetURL string) string {
-	// 从 URL 提取文件名
-	assetName := filepath.Base(assetURL)
-	sha256FileName := assetName + ".sha256"
-
-	// 查找 SHA256 文件
-	var sha256URL string
-	for _, asset := range assets {
-		if asset.Name == sha256FileName {
-			sha256URL = asset.BrowserDownloadURL
+	for _, asset := range release.Assets {
+		if asset.Name == assetName {
+			downloadURL = asset.BrowserDownloadURL
+			size = asset.Size
 			break
 		}
 	}
 
-	if sha256URL == "" {
-		log.Printf("[UpdateService] 未找到 SHA256 文件: %s", sha256FileName)
-		return ""
+	if downloadURL == "" {
+		return nil, fmt.Errorf("no asset found for: %s", assetName)
 	}
 
-	// 下载并解析 SHA256 文件
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(sha256URL)
-	if err != nil {
-		log.Printf("[UpdateService] 下载 SHA256 文件失败: %v", err)
-		return ""
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		log.Printf("[UpdateService] SHA256 文件返回错误状态码: %d", resp.StatusCode)
-		return ""
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("[UpdateService] 读取 SHA256 文件失败: %v", err)
-		return ""
-	}
-
-	// 解析格式：<hash>  <filename> 或 <hash> <filename>
-	content := strings.TrimSpace(string(body))
-	parts := strings.Fields(content)
-	if len(parts) >= 1 {
-		log.Printf("[UpdateService] 获取到 SHA256: %s", parts[0])
-		return parts[0] // 返回哈希值
-	}
-
-	return ""
+	return &UpdateInfo{
+		Version:     release.TagName,
+		PubDate:     release.PublishedAt,
+		Notes:       release.Body,
+		DownloadURL: downloadURL,
+		SHA256:      "", // GitHub API 不提供 SHA256
+		Size:        size,
+	}, nil
 }
 
-// DownloadUpdate 下载更新文件（支持更新锁、重试、断点续传、SHA256校验）
-func (us *UpdateService) DownloadUpdate(progressCallback func(float64)) error {
-	log.Printf("[UpdateService] 开始下载更新...")
-
-	// 获取更新锁，防止并发下载
-	if err := us.acquireUpdateLock(); err != nil {
-		log.Printf("[UpdateService] ❌ 获取更新锁失败: %v", err)
-		return err
-	}
-	defer us.releaseUpdateLock()
-
-	us.mu.Lock()
-	url := us.downloadURL
-	// P0-3 修复：快照 version 和 SHA256，避免竞态条件
-	snapshotVersion := us.latestVersion
-	snapshotSHA := ""
-	if us.latestUpdateInfo != nil {
-		snapshotSHA = us.latestUpdateInfo.SHA256
-	}
-	// 重置下载状态
-	us.updateReady = false
-	us.downloadProgress = 0
-	us.mu.Unlock()
-	us.SaveState()
-
-	if url == "" {
-		log.Printf("[UpdateService] ❌ 下载链接为空")
-		return fmt.Errorf("下载链接为空，请先检查更新")
+// doDownload 执行下载
+func (us *UpdateService) doDownload(ctx context.Context, info *UpdateInfo) {
+	// 准备下载路径
+	tempDir := filepath.Join(us.dataDir, "downloads")
+	if err := os.MkdirAll(tempDir, 0755); err != nil {
+		us.setDownloadError(fmt.Sprintf("failed to create temp dir: %v", err))
+		return
 	}
 
-	// P1-1 修复：强制要求 SHA256 校验，禁止无哈希降级
-	if snapshotSHA == "" {
-		log.Printf("[UpdateService] ❌ 缺少 SHA256 校验信息，拒绝下载")
-		return fmt.Errorf("缺少 SHA256 校验信息，无法安全下载更新（请确保发布包含 .sha256 文件）")
-	}
+	// 根据 URL 确定文件名
+	fileName := filepath.Base(info.DownloadURL)
+	tempPath := filepath.Join(tempDir, fileName+".download")
+	finalPath := filepath.Join(tempDir, fileName)
 
-	log.Printf("[UpdateService] 下载 URL: %s", url)
+	// 尝试加载断点续传状态
+	stateFile := filepath.Join(us.dataDir, "download_state.json")
+	var dlState *DownloadState
 
-	filePath := filepath.Join(us.updateDir, filepath.Base(url))
-
-	// 检查本地是否已有完整文件（断点续传场景：之前下载完成但未安装）
-	if snapshotSHA != "" {
-		if hash, err := calculateSHA256(filePath); err == nil && strings.EqualFold(hash, snapshotSHA) {
-			log.Printf("[UpdateService] 本地已有完整文件，跳过下载")
-			us.mu.Lock()
-			us.updateFilePath = filePath
-			us.downloadProgress = 100
-			us.mu.Unlock()
-			return us.prepareUpdateInternal(snapshotVersion, snapshotSHA, filePath)
+	if data, err := os.ReadFile(stateFile); err == nil {
+		var state DownloadState
+		if json.Unmarshal(data, &state) == nil && state.URL == info.DownloadURL {
+			dlState = &state
 		}
 	}
 
-	log.Printf("[UpdateService] 开始下载到: %s", filePath)
-
-	// 三次重试下载
-	var lastErr error
-	for attempt := 1; attempt <= 3; attempt++ {
-		log.Printf("[UpdateService] 下载尝试 %d/3...", attempt)
-		if err := us.downloadWithResume(url, filePath, progressCallback); err != nil {
-			lastErr = err
-			log.Printf("[UpdateService] 下载失败（第%d次）: %v", attempt, err)
-			time.Sleep(time.Duration(attempt) * 2 * time.Second)
-			continue
-		}
-		lastErr = nil
-		break
-	}
-	if lastErr != nil {
-		_ = os.Remove(filePath) // 清理残留文件
-		return fmt.Errorf("下载失败: %w", lastErr)
-	}
-
-	// SHA256 校验
-	if snapshotSHA != "" {
-		if err := us.verifyDownload(filePath, snapshotSHA); err != nil {
-			_ = os.Remove(filePath)
-			return err
-		}
-	}
-
-	us.mu.Lock()
-	us.updateFilePath = filePath
-	us.downloadProgress = 100
-	us.mu.Unlock()
-
-	// 下载成功后立即准备更新，使用快照值写入 pending 标记
-	if err := us.prepareUpdateInternal(snapshotVersion, snapshotSHA, filePath); err != nil {
-		return fmt.Errorf("准备更新失败: %w", err)
-	}
-
-	return nil
-}
-
-// downloadWithResume 支持断点续传的下载
-func (us *UpdateService) downloadWithResume(url, dest string, progressCallback func(float64)) error {
-	client := &http.Client{Timeout: 5 * time.Minute}
-
-	var start int64
-	var total int64
-	if info, err := os.Stat(dest); err == nil {
-		start = info.Size()
-	}
-
-	// HEAD 请求检查是否支持 Range
-	if start > 0 {
-		head, err := client.Head(url)
-		if head != nil {
-			_ = head.Body.Close()
-		}
-
-		if err == nil && head != nil && head.StatusCode == http.StatusOK {
-			if strings.EqualFold(head.Header.Get("Accept-Ranges"), "bytes") {
-				total = head.ContentLength
-				log.Printf("[UpdateService] 断点续传: 从 %d 字节继续下载", start)
-			} else {
-				start = 0
-				_ = os.Remove(dest)
+	// 检查临时文件是否存在
+	var startByte int64 = 0
+	if dlState != nil {
+		if fi, err := os.Stat(dlState.TempFilePath); err == nil {
+			startByte = fi.Size()
+			if startByte > dlState.ExpectedSize {
+				// 本地文件比预期大，删除重下
+				os.Remove(dlState.TempFilePath)
+				startByte = 0
+				dlState = nil
+			} else if startByte == dlState.ExpectedSize {
+				// 已下载完成，跳到校验
+				us.mu.Lock()
+				us.downloadedBytes = startByte
+				us.downloadState = dlState
+				us.mu.Unlock()
+				us.verifyAndFinalize(dlState.TempFilePath, finalPath, info)
+				return
 			}
 		} else {
-			start = 0
-			_ = os.Remove(dest)
+			dlState = nil
 		}
 	}
 
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return err
-	}
-	if start > 0 {
-		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", start))
+	// 初始化新的下载状态
+	if dlState == nil {
+		dlState = &DownloadState{
+			URL:            info.DownloadURL,
+			ExpectedSHA256: info.SHA256,
+			ExpectedSize:   info.Size,
+			TempFilePath:   tempPath,
+		}
 	}
 
-	resp, err := client.Do(req)
+	// HEAD 请求获取 ETag/Last-Modified
+	headReq, err := http.NewRequestWithContext(ctx, "HEAD", info.DownloadURL, nil)
 	if err != nil {
-		return err
+		us.setDownloadError(fmt.Sprintf("failed to create HEAD request: %v", err))
+		return
+	}
+
+	headResp, err := http.DefaultClient.Do(headReq)
+	if err != nil {
+		us.setDownloadError(fmt.Sprintf("HEAD request failed: %v", err))
+		return
+	}
+	headResp.Body.Close()
+
+	// P0: 校验重定向后的最终 URL
+	finalURL := headResp.Request.URL.String()
+	if !isURLAllowed(finalURL) {
+		us.setDownloadError(fmt.Sprintf("redirected URL not in whitelist: %s", finalURL))
+		return
+	}
+
+	newETag := headResp.Header.Get("ETag")
+	newLastModified := headResp.Header.Get("Last-Modified")
+
+	// 检查是否需要重新下载
+	if startByte > 0 {
+		if (dlState.ETag != "" && newETag != dlState.ETag) ||
+			(dlState.LastModified != "" && newLastModified != dlState.LastModified) {
+			// 远端文件已变更，删除本地文件重下
+			os.Remove(tempPath)
+			startByte = 0
+		}
+	}
+
+	dlState.ETag = newETag
+	dlState.LastModified = newLastModified
+
+	// 保存下载状态
+	us.saveDownloadState(stateFile, dlState)
+
+	// 发起下载请求
+	req, err := http.NewRequestWithContext(ctx, "GET", info.DownloadURL, nil)
+	if err != nil {
+		us.setDownloadError(fmt.Sprintf("failed to create GET request: %v", err))
+		return
+	}
+
+	// 设置 Range 和 If-Range
+	if startByte > 0 {
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", startByte))
+		if newETag != "" {
+			req.Header.Set("If-Range", newETag)
+		} else if newLastModified != "" {
+			req.Header.Set("If-Range", newLastModified)
+		}
+	}
+	req.Header.Set("Accept-Encoding", "identity") // 避免透明压缩
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		us.setDownloadError(fmt.Sprintf("download request failed: %v", err))
+		return
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
-		return fmt.Errorf("下载失败，HTTP 状态码: %d", resp.StatusCode)
+	// P0: 校验重定向后的最终 URL
+	getFinalURL := resp.Request.URL.String()
+	if !isURLAllowed(getFinalURL) {
+		us.setDownloadError(fmt.Sprintf("GET redirected URL not in whitelist: %s", getFinalURL))
+		return
 	}
 
-	// P1-4 修复：服务器忽略 Range 请求返回 200 时，必须重新下载而非追加
-	// 否则会把完整文件追加到半文件末尾，导致数据损坏
-	if start > 0 && resp.StatusCode == http.StatusOK {
-		log.Printf("[UpdateService] 服务器忽略 Range 请求（返回 200），从头开始下载")
-		start = 0
-		total = 0
-		_ = os.Remove(dest)
-	}
-
-	if total == 0 {
-		total = resp.ContentLength
-		if total > 0 && start > 0 {
-			total += start
+	// 处理响应
+	var file *os.File
+	switch resp.StatusCode {
+	case http.StatusOK:
+		// 200: 全量下载（忽略 Range 或远端变更）
+		file, err = os.Create(tempPath)
+		startByte = 0
+	case http.StatusPartialContent:
+		// 206: 断点续传
+		// 验证 Content-Range
+		contentRange := resp.Header.Get("Content-Range")
+		if contentRange != "" {
+			// 格式: bytes start-end/total
+			var rangeStart, rangeEnd, rangeTotal int64
+			fmt.Sscanf(contentRange, "bytes %d-%d/%d", &rangeStart, &rangeEnd, &rangeTotal)
+			if rangeStart != startByte || rangeTotal != info.Size {
+				// 不一致，全量重下
+				os.Remove(tempPath)
+				file, err = os.Create(tempPath)
+				startByte = 0
+			} else {
+				file, err = os.OpenFile(tempPath, os.O_APPEND|os.O_WRONLY, 0644)
+			}
+		} else {
+			file, err = os.OpenFile(tempPath, os.O_APPEND|os.O_WRONLY, 0644)
 		}
+	case http.StatusRequestedRangeNotSatisfiable:
+		// 416: Range 无法满足，全量重下
+		os.Remove(tempPath)
+		file, err = os.Create(tempPath)
+		startByte = 0
+	default:
+		us.setDownloadError(fmt.Sprintf("unexpected status code: %d", resp.StatusCode))
+		return
 	}
 
-	var out *os.File
-	if start > 0 && resp.StatusCode == http.StatusPartialContent {
-		out, err = os.OpenFile(dest, os.O_WRONLY|os.O_APPEND, 0o644)
-	} else {
-		out, err = os.Create(dest)
-	}
 	if err != nil {
-		return err
+		us.setDownloadError(fmt.Sprintf("failed to open file: %v", err))
+		return
 	}
-	defer out.Close()
+	defer file.Close()
 
-	downloaded := start
-	buf := make([]byte, 32*1024)
+	// 更新状态
+	us.mu.Lock()
+	us.downloadedBytes = startByte
+	us.downloadState = dlState
+	us.mu.Unlock()
+
+	// 下载数据
+	buf := make([]byte, 32*1024) // 32KB buffer
 	for {
+		select {
+		case <-ctx.Done():
+			// 下载被取消
+			dlState.DownloadedBytes = us.downloadedBytes
+			us.saveDownloadState(stateFile, dlState)
+			return
+		default:
+		}
+
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
-			if _, writeErr := out.Write(buf[:n]); writeErr != nil {
-				return fmt.Errorf("写入文件失败: %w", writeErr)
+			if _, writeErr := file.Write(buf[:n]); writeErr != nil {
+				us.setDownloadError(fmt.Sprintf("failed to write file: %v", writeErr))
+				return
 			}
-			downloaded += int64(n)
 
-			if total > 0 {
-				progress := float64(downloaded) / float64(total) * 100
-				us.mu.Lock()
-				us.downloadProgress = progress
-				us.mu.Unlock()
-				// 回调是可选的，但进度始终更新
-				if progressCallback != nil {
-					progressCallback(progress)
-				}
-			}
+			us.mu.Lock()
+			us.downloadedBytes += int64(n)
+			downloaded := us.downloadedBytes
+			us.mu.Unlock()
+
+			// 发送进度事件（节流）
+			us.emitProgressThrottled(downloaded, info.Size)
 		}
+
 		if readErr == io.EOF {
 			break
 		}
 		if readErr != nil {
-			return fmt.Errorf("读取数据失败: %w", readErr)
+			// P0: 检查是否是取消导致的错误，不要误报为 error
+			if ctx.Err() != nil {
+				// 下载被取消，保存续传状态后正常返回
+				dlState.DownloadedBytes = us.downloadedBytes
+				us.saveDownloadState(stateFile, dlState)
+				return
+			}
+			us.setDownloadError(fmt.Sprintf("download error: %v", readErr))
+			// 保存状态以便续传
+			dlState.DownloadedBytes = us.downloadedBytes
+			us.saveDownloadState(stateFile, dlState)
+			return
 		}
 	}
-	return nil
+
+	// 下载完成，验证并完成
+	us.verifyAndFinalize(tempPath, finalPath, info)
 }
 
-// prepareUpdateInternal 内部方法：使用明确的 version/sha256/filePath 写入 pending 标记
-// P0-3 修复：避免从共享字段读取，消除竞态条件
-func (us *UpdateService) prepareUpdateInternal(version, sha256, filePath string) error {
-	log.Printf("[UpdateService] 准备更新 (version=%s)...", version)
-
-	if filePath == "" {
-		log.Printf("[UpdateService] ❌ 更新文件路径为空")
-		return fmt.Errorf("更新文件路径为空")
-	}
-
-	log.Printf("[UpdateService] 更新文件: %s", filePath)
-
-	// 写入待更新标记（包含 SHA256 用于重启后校验）
-	pendingFile := filepath.Join(filepath.Dir(us.stateFile), ".pending-update")
-	metadata := map[string]interface{}{
-		"version":       version,
-		"download_path": filePath,
-		"download_time": time.Now().Format(time.RFC3339),
-	}
-
-	// 持久化 SHA256（关键：重启后 latestUpdateInfo 会丢失）
-	if sha256 != "" {
-		metadata["sha256"] = sha256
-	}
-
-	data, err := json.MarshalIndent(metadata, "", "  ")
-	if err != nil {
-		return fmt.Errorf("序列化元数据失败: %w", err)
-	}
-
-	// P1-1 修复：pending 是重启后的权威来源，使用原子写避免崩溃/断电损坏
-	if err := atomicWriteFile(pendingFile, data, 0o644); err != nil {
-		log.Printf("[UpdateService] ❌ 写入 pending 标记失败: %v", err)
-		return fmt.Errorf("写入标记文件失败: %w", err)
-	}
-
-	log.Printf("[UpdateService] ✅ 已写入 pending 标记: %s", pendingFile)
-
-	us.mu.Lock()
-	us.updateReady = true
-	us.mu.Unlock()
-
-	us.SaveState()
-
-	log.Printf("[UpdateService] ✅ 更新已准备就绪，等待重启应用")
-
-	return nil
-}
-
-// PrepareUpdate 准备更新（公开方法，保留兼容性）
-// Deprecated: 建议使用 DownloadUpdate，它会自动调用内部 prepare 逻辑
-func (us *UpdateService) PrepareUpdate() error {
-	us.mu.Lock()
-	version := us.latestVersion
-	sha256 := ""
-	if us.latestUpdateInfo != nil {
-		sha256 = us.latestUpdateInfo.SHA256
-	}
-	filePath := us.updateFilePath
-	us.mu.Unlock()
-
-	return us.prepareUpdateInternal(version, sha256, filePath)
-}
-
-// ApplyUpdate 应用更新（启动时调用）
-// 添加更新锁防止并发，SHA256 校验防止损坏文件
-func (us *UpdateService) ApplyUpdate() error {
-	pendingFile := filepath.Join(filepath.Dir(us.stateFile), ".pending-update")
-
-	// 检查是否有待更新
-	if _, err := os.Stat(pendingFile); os.IsNotExist(err) {
-		return nil // 没有待更新
-	}
-
-	// 获取更新锁
-	if err := us.acquireUpdateLock(); err != nil {
-		log.Printf("[UpdateService] 获取更新锁失败，跳过更新: %v", err)
-		return nil // 另一个更新正在进行，静默跳过
-	}
-	defer us.releaseUpdateLock()
-
-	// 读取元数据
-	data, err := os.ReadFile(pendingFile)
-	if err != nil {
-		us.clearPendingState()
-		return fmt.Errorf("读取标记文件失败: %w", err)
-	}
-
-	var metadata map[string]interface{}
-	if err := json.Unmarshal(data, &metadata); err != nil {
-		us.clearPendingState()
-		return fmt.Errorf("解析元数据失败: %w", err)
-	}
-
-	downloadPath, ok := metadata["download_path"].(string)
-	if !ok || downloadPath == "" {
-		us.clearPendingState()
-		return fmt.Errorf("元数据中缺少下载路径")
-	}
-
-	// 检查下载文件是否存在
-	if _, err := os.Stat(downloadPath); os.IsNotExist(err) {
-		us.clearPendingState()
-		return fmt.Errorf("更新文件不存在: %s", downloadPath)
-	}
-
-	// 从元数据恢复 version 和 SHA256（供 downloadAndVerify 等方法使用）
-	var expectedHash string
-	us.mu.Lock()
-	if version, ok := metadata["version"].(string); ok && version != "" {
-		us.latestVersion = version
-		log.Printf("[UpdateService] 从元数据恢复 version: %s", version)
-	}
-	if sha256Hash, ok := metadata["sha256"].(string); ok && sha256Hash != "" {
-		expectedHash = sha256Hash
-		us.latestUpdateInfo = &UpdateInfo{
-			SHA256: sha256Hash,
-		}
-		log.Printf("[UpdateService] 从元数据恢复 SHA256: %s", sha256Hash)
-	}
-	us.mu.Unlock()
-
-	// P1-1 修复：强制要求 SHA256 校验，禁止无哈希降级
-	if expectedHash == "" {
-		log.Printf("[UpdateService] ❌ pending 文件缺少 SHA256 校验信息，拒绝安装")
-		us.clearPendingState()
-		_ = os.Remove(downloadPath)
-		return fmt.Errorf("pending 文件缺少 SHA256 校验信息，无法安全安装更新")
-	}
-
+// verifyAndFinalize 验证下载并完成
+func (us *UpdateService) verifyAndFinalize(tempPath, finalPath string, info *UpdateInfo) {
 	// SHA256 校验
-	if err := us.verifyDownload(downloadPath, expectedHash); err != nil {
-		log.Printf("[UpdateService] SHA256 校验失败: %v", err)
-		us.clearPendingState()
-		_ = os.Remove(downloadPath) // 删除损坏的文件
-		return fmt.Errorf("更新文件校验失败: %w", err)
+	if info.SHA256 != "" {
+		hash, err := computeSHA256(tempPath)
+		if err != nil {
+			us.setDownloadError(fmt.Sprintf("failed to compute SHA256: %v", err))
+			return
+		}
+		if !strings.EqualFold(hash, info.SHA256) {
+			os.Remove(tempPath)
+			us.setDownloadError(fmt.Sprintf("SHA256 mismatch: expected %s, got %s", info.SHA256, hash))
+			return
+		}
 	}
-	log.Println("[UpdateService] SHA256 校验通过")
 
-	// 根据平台执行安装
-	var installErr error
+	// 移动到最终路径
+	if err := os.Rename(tempPath, finalPath); err != nil {
+		// 跨卷可能失败，尝试复制
+		if copyErr := copyFileForUpdate(tempPath, finalPath); copyErr != nil {
+			us.setDownloadError(fmt.Sprintf("failed to move file: %v", err))
+			return
+		}
+		os.Remove(tempPath)
+	}
+
+	// 如果是 macOS 的 zip 文件，解压
+	if runtime.GOOS == "darwin" && strings.HasSuffix(finalPath, ".zip") {
+		extractDir := filepath.Join(us.dataDir, "downloads", "extracted")
+		if err := unzip(finalPath, extractDir); err != nil {
+			us.setDownloadError(fmt.Sprintf("failed to extract zip: %v", err))
+			return
+		}
+		// 查找 .app 目录
+		entries, _ := os.ReadDir(extractDir)
+		for _, entry := range entries {
+			if strings.HasSuffix(entry.Name(), ".app") {
+				finalPath = filepath.Join(extractDir, entry.Name())
+				break
+			}
+		}
+	}
+
+	// 更新状态
+	us.mu.Lock()
+	us.downloadState.TempFilePath = finalPath
+	us.downloadState.DownloadedBytes = us.downloadedBytes
+	us.state = StateReady
+	us.mu.Unlock()
+
+	// 清理下载状态文件
+	stateFile := filepath.Join(us.dataDir, "download_state.json")
+	os.Remove(stateFile)
+
+	us.emitStateUnlocked() // P1: 改用 emitStateUnlocked（未持锁）
+}
+
+// setDownloadError 设置下载错误
+func (us *UpdateService) setDownloadError(msg string) {
+	us.mu.Lock()
+	us.state = StateError
+	us.lastError = msg
+	us.errorOp = "download"
+	us.mu.Unlock()
+	us.emitStateUnlocked() // P1: 改用 emitStateUnlocked（未持锁）
+}
+
+// saveDownloadState 保存下载状态
+func (us *UpdateService) saveDownloadState(path string, state *DownloadState) {
+	data, _ := json.MarshalIndent(state, "", "  ")
+	_ = os.WriteFile(path, data, 0644)
+}
+
+// launchUpdater 启动更新程序
+func (us *UpdateService) launchUpdater(pending *PendingApply) error {
 	switch runtime.GOOS {
 	case "windows":
-		installErr = us.applyUpdateWindows(downloadPath)
+		return us.launchWindowsUpdater(pending)
 	case "darwin":
-		installErr = us.applyUpdateDarwin(downloadPath)
+		return us.launchMacOSUpdater(pending)
 	case "linux":
-		installErr = us.applyUpdateLinux(downloadPath)
+		return us.launchLinuxUpdater(pending)
 	default:
-		installErr = fmt.Errorf("不支持的平台: %s", runtime.GOOS)
+		return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
 	}
-
-	if installErr != nil {
-		// UAC 取消：不清理 pending，允许用户重试
-		if errors.Is(installErr, ErrUACDenied) {
-			log.Printf("[UpdateService] 用户取消 UAC，保留待更新状态: %v", installErr)
-			return installErr
-		}
-		// 其他安装失败：清理状态但保留下载文件（可能需要重试）
-		us.clearPendingState()
-		return installErr
-	}
-
-	// 清理标记文件（成功情况下由平台特定函数清理）
-	return nil
 }
 
-// clearPendingState 统一清理更新状态（成功或失败后调用）
-func (us *UpdateService) clearPendingState() {
-	pendingFile := filepath.Join(filepath.Dir(us.stateFile), ".pending-update")
-	_ = os.Remove(pendingFile)
-
-	us.mu.Lock()
-	us.updateReady = false
-	us.downloadProgress = 0
-	us.mu.Unlock()
-
-	us.SaveState()
-	log.Println("[UpdateService] 已清理更新状态")
-}
-
-// applyUpdateWindows Windows 平台更新
-func (us *UpdateService) applyUpdateWindows(updatePath string) error {
-	if us.isPortable {
-		// 便携版：替换当前可执行文件
-		return us.applyPortableUpdate(updatePath)
+// launchWindowsUpdater Windows 更新器
+func (us *UpdateService) launchWindowsUpdater(pending *PendingApply) error {
+	if pending.Method == "installer" {
+		// 安装版：直接运行 installer
+		cmd := exec.Command(pending.FilePath, "/S") // NSIS 静默安装
+		return cmd.Start()
 	}
 
-	// 安装版：使用 updater.exe 辅助程序静默更新
-	return us.applyInstalledUpdate(updatePath)
-}
-
-// applyPortableUpdate 便携版更新逻辑
-// 使用 PowerShell 脚本等待当前进程退出后替换文件，解决 Windows 文件锁定问题
-// P1-5 修复：pending 由脚本在成功时清理，lock 总是清理
-func (us *UpdateService) applyPortableUpdate(newExePath string) error {
-	currentExe, err := os.Executable()
+	// 便携版：使用 PowerShell 脚本
+	exePath, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("获取当前可执行文件路径失败: %w", err)
-	}
-
-	// 解析符号链接（如果有）
-	currentExe, err = filepath.EvalSymlinks(currentExe)
-	if err != nil {
-		return fmt.Errorf("解析符号链接失败: %w", err)
-	}
-
-	log.Printf("[UpdateService] 便携版更新: %s -> %s", newExePath, currentExe)
-
-	// 构建 PowerShell 脚本：等待进程退出 → 替换文件 → 启动新版本
-	backupPath := currentExe + ".old"
-	pid := os.Getpid()
-	// P1-5: 传递 pending 和 lock 文件路径给脚本
-	pendingFile := filepath.Join(filepath.Dir(us.stateFile), ".pending-update")
-	lockFile := filepath.Join(us.updateDir, "update.lock")
-
-	// PowerShell 脚本内容
-	psScript := fmt.Sprintf(`
-$ErrorActionPreference = 'Stop'
-$pid = %d
-$currentExe = '%s'
-$newExe = '%s'
-$backupPath = '%s'
-$pendingFile = '%s'
-$lockFile = '%s'
-
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$logFile = Join-Path $scriptDir "update-portable.log"
-function Log($msg) {
-  $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-  Add-Content -Path $logFile -Value "[update-portable] $ts $msg"
-}
-
-# P1-5: 总是清理 lock 文件（无论成功失败）
-function Cleanup-Lock {
-  if (Test-Path $lockFile) {
-    Remove-Item $lockFile -Force -ErrorAction SilentlyContinue
-    Log "cleanup lock"
-  }
-}
-
-Log "start update: pid=$pid current=$currentExe new=$newExe backup=$backupPath"
-if (-not (Test-Path $newExe)) {
-  Log "error: new file not exists: $newExe"
-  Cleanup-Lock
-  throw "新文件不存在: $newExe"
-}
-
-# 等待主进程退出（最多 30 秒）
-$proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
-if ($proc) {
-    Log "waiting for process $pid to exit..."
-    $proc.WaitForExit(30000) | Out-Null
-}
-
-# 短暂延迟确保文件释放
-Start-Sleep -Milliseconds 500
-
-try {
-  # 备份旧文件
-  if (Test-Path $currentExe) {
-      Move-Item -Path $currentExe -Destination $backupPath -Force
-      Log "backup ok: $backupPath"
-  }
-
-  # 复制新文件
-  Copy-Item -Path $newExe -Destination $currentExe -Force
-  Log "replace ok: $currentExe"
-
-  # 启动新版本
-  Start-Process -FilePath $currentExe | Out-Null
-  Log "relaunch ok"
-
-  # P1-5: 成功后清理 pending
-  if (Test-Path $pendingFile) {
-    Remove-Item $pendingFile -Force -ErrorAction SilentlyContinue
-    Log "cleanup pending"
-  }
-
-  # 清理备份
-  Start-Sleep -Seconds 2
-  if (Test-Path $backupPath) {
-      Remove-Item -Path $backupPath -Force -ErrorAction SilentlyContinue
-      Log "cleanup backup"
-  }
-
-  Log "update completed"
-  Cleanup-Lock
-  exit 0
-} catch {
-  Log ("update failed: " + $_.Exception.Message)
-  # 回滚：把旧 exe 放回去并尝试启动
-  if (Test-Path $backupPath) {
-    try {
-      Move-Item -Path $backupPath -Destination $currentExe -Force
-      Log "rollback ok"
-      Start-Process -FilePath $currentExe | Out-Null
-      Log "rollback relaunch ok"
-    } catch {
-      Log ("rollback failed: " + $_.Exception.Message)
-    }
-  }
-  Cleanup-Lock
-  exit 1
-}
-`,
-		pid,
-		strings.ReplaceAll(currentExe, `'`, `''`),
-		strings.ReplaceAll(newExePath, `'`, `''`),
-		strings.ReplaceAll(backupPath, `'`, `''`),
-		strings.ReplaceAll(pendingFile, `'`, `''`),
-		strings.ReplaceAll(lockFile, `'`, `''`),
-	)
-
-	// 将脚本写入临时文件
-	scriptPath := filepath.Join(us.updateDir, "update-portable.ps1")
-	if err := os.WriteFile(scriptPath, []byte(psScript), 0o644); err != nil {
-		return fmt.Errorf("写入更新脚本失败: %w", err)
-	}
-
-	log.Printf("[UpdateService] 已创建更新脚本: %s", scriptPath)
-
-	// 启动 PowerShell 执行脚本（-WindowStyle Hidden 隐藏窗口）
-	cmd := exec.Command("powershell.exe",
-		"-ExecutionPolicy", "Bypass",
-		"-WindowStyle", "Hidden",
-		"-File", scriptPath,
-	)
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("启动更新脚本失败: %w", err)
-	}
-
-	// P1-5: 不再在此处调用 clearPendingState()，由脚本负责
-	// P1-2 修复：不再提前释放更新锁，由脚本在成功/失败时统一清理
-
-	log.Printf("[UpdateService] 更新脚本已启动 (PID=%d)，准备退出主程序...", cmd.Process.Pid)
-
-	// 退出当前进程，让 PowerShell 脚本完成替换
-	os.Exit(0)
-	return nil
-}
-
-// applyUpdateDarwin macOS 平台更新
-func (us *UpdateService) applyUpdateDarwin(zipPath string) error {
-	currentExe, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("获取当前可执行文件路径失败: %w", err)
-	}
-
-	currentExe, err = filepath.EvalSymlinks(currentExe)
-	if err != nil {
-		return fmt.Errorf("解析符号链接失败: %w", err)
-	}
-
-	pid := os.Getpid()
-
-	// 定位当前运行的 .app 包路径（支持安装版和便携版）
-	appPath := currentExe
-	for i := 0; i < 6; i++ {
-		if strings.HasSuffix(strings.ToLower(appPath), ".app") {
-			break
-		}
-		parent := filepath.Dir(appPath)
-		if parent == appPath {
-			break
-		}
-		appPath = parent
-	}
-	if !strings.HasSuffix(strings.ToLower(appPath), ".app") {
-		return fmt.Errorf("无法定位当前应用包(.app)路径: %s", currentExe)
-	}
-	targetAppPath := appPath
-	parentDir := filepath.Dir(targetAppPath)
-
-	log.Printf("[UpdateService] macOS 更新目标应用: %s", targetAppPath)
-
-	// P1-5: 获取 pending 和 lock 文件路径
-	pendingFile := filepath.Join(filepath.Dir(us.stateFile), ".pending-update")
-	lockFile := filepath.Join(us.updateDir, "update.lock")
-
-	// 创建临时解压目录
-	if err := os.MkdirAll(us.updateDir, 0o755); err != nil {
-		return fmt.Errorf("创建更新目录失败: %w", err)
-	}
-	extractDir, err := os.MkdirTemp(us.updateDir, "darwin-update-*")
-	if err != nil {
-		return fmt.Errorf("创建临时解压目录失败: %w", err)
-	}
-
-	// P1-6 修复：使用安全解压函数替代系统 unzip 命令（防止 Zip-Slip 攻击）
-	log.Printf("[UpdateService] 解压更新包: %s -> %s", zipPath, extractDir)
-	if err := safeUnzip(zipPath, extractDir); err != nil {
-		_ = os.RemoveAll(extractDir)
-		return fmt.Errorf("解压更新包失败: %w", err)
-	}
-
-	// 查找新 .app 包：优先同名、浅层优先、必要时递归
-	preferredName := filepath.Base(targetAppPath) // e.g. CodeSwitch.app
-	newAppPath, err := findNewAppBundle(extractDir, preferredName)
-	if err != nil {
-		_ = os.RemoveAll(extractDir)
 		return err
 	}
-	log.Printf("[UpdateService] 已找到新应用包: %s", newAppPath)
 
-	// 检查目标目录可写（/Applications 可能无权限）
-	testFile := filepath.Join(parentDir, fmt.Sprintf(".updateservice-write-test-%d", pid))
-	if err := os.WriteFile(testFile, []byte("test"), 0o644); err != nil {
-		log.Printf("[UpdateService] 目标目录不可写: %s, err=%v", parentDir, err)
-		_ = os.RemoveAll(extractDir)
-		return fmt.Errorf("目标目录不可写，无法自动更新到 %s，请手动安装或使用管理员权限", parentDir)
-	}
-	_ = os.Remove(testFile)
+	pid := os.Getpid()
+	script := fmt.Sprintf(`
+$ErrorActionPreference = 'Stop'
+$oldExe = '%s'
+$newExe = '%s'
+$pid = %d
+$maxWait = 60
 
-	// 构建 bash 脚本：等待进程退出 → 备份/替换 .app → 清除隔离属性 → 重启
-	scriptPath := filepath.Join(us.updateDir, fmt.Sprintf("update-darwin-%d.sh", time.Now().UnixNano()))
-	logFile := filepath.Join(us.updateDir, "update-darwin.log")
-	backupAppPath := targetAppPath + ".old"
-
-	bashScript := `#!/bin/bash
-set -euo pipefail
-
-PID="$1"
-TARGET_APP="$2"
-NEW_APP="$3"
-BACKUP_APP="$4"
-EXTRACT_DIR="$5"
-LOG_FILE="$6"
-PENDING_FILE="$7"
-LOCK_FILE="$8"
-
-log() {
-  echo "[update-darwin] $(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG_FILE"
+# 等待旧进程退出
+$waited = 0
+while ($waited -lt $maxWait) {
+    try {
+        $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+        if (-not $proc) { break }
+    } catch { break }
+    Start-Sleep -Milliseconds 500
+    $waited += 0.5
 }
 
-# P1-5: 总是清理 lock 文件（无论成功失败）
-cleanup_lock() {
-  if [ -f "$LOCK_FILE" ]; then
-    rm -f "$LOCK_FILE" 2>/dev/null || true
-    log "cleanup lock"
-  fi
+if ($waited -ge $maxWait) {
+    Write-Error "Timeout waiting for process to exit"
+    exit 1
 }
 
-# 使用 EXIT trap 确保任何退出路径都会清理 lock（包括 exit 1）
-trap 'rc=$?; if [ $rc -ne 0 ]; then log "script exit with error, code=$rc"; fi; cleanup_lock' EXIT
+# 同卷 staging
+$stagingPath = "$oldExe.new"
+Copy-Item -Path $newExe -Destination $stagingPath -Force
 
-log "start update: pid=$PID target=$TARGET_APP new=$NEW_APP backup=$BACKUP_APP"
-
-# macOS PPID detection using ps
-get_ppid() {
-  ps -o ppid= -p "$$" 2>/dev/null | tr -d '[:space:]' || true
+# 验证复制成功
+if (-not (Test-Path $stagingPath)) {
+    Write-Error "Failed to copy new executable"
+    exit 1
 }
 
-# Get initial PPID to verify parent-child relationship
-PPID_INIT="$(get_ppid)"
-USE_PPID_CHECK=0
-if [ -n "$PPID_INIT" ] && [ "$PPID_INIT" = "$PID" ]; then
-  USE_PPID_CHECK=1
-  log "PPID check enabled: initial ppid=$PPID_INIT matches target pid=$PID"
-else
-  log "PPID check disabled: initial ppid=${PPID_INIT:-unknown} != target pid=$PID, using kill -0 only"
-fi
+# 重命名交换（原子操作）
+$backupPath = "$oldExe.old.exe"
+$retries = 20
+for ($i = 0; $i -lt $retries; $i++) {
+    try {
+        if (Test-Path $backupPath) { Remove-Item $backupPath -Force }
+        Rename-Item -Path $oldExe -NewName (Split-Path $backupPath -Leaf) -Force
+        Rename-Item -Path $stagingPath -NewName (Split-Path $oldExe -Leaf) -Force
+        break
+    } catch {
+        if ($i -eq ($retries - 1)) {
+            # 回滚
+            if (Test-Path $backupPath) {
+                Rename-Item -Path $backupPath -NewName (Split-Path $oldExe -Leaf) -Force -ErrorAction SilentlyContinue
+            }
+            throw
+        }
+        Start-Sleep -Milliseconds 100
+    }
+}
 
-# Wait for main process to exit (max ~30 seconds)
-# Single loop: check both kill -0 and PPID change
-exit_ok=0
-for i in {1..300}; do
-  # Primary check: process no longer exists
-  if ! kill -0 "$PID" 2>/dev/null; then
-    exit_ok=1
-    log "main process exited (kill -0 failed)"
-    break
-  fi
-  # Secondary check: PPID changed (if enabled)
-  if [ "$USE_PPID_CHECK" -eq 1 ]; then
-    PPID_NOW="$(get_ppid)"
-    if [ -n "$PPID_NOW" ] && [ "$PPID_NOW" != "$PID" ]; then
-      exit_ok=1
-      log "main process exited (ppid changed: $PPID_INIT -> $PPID_NOW)"
-      break
-    fi
-  fi
-  sleep 0.1
-done
+# 启动新版本
+Start-Process -FilePath $oldExe -WorkingDirectory (Split-Path $oldExe)
 
-if [ "$exit_ok" -ne 1 ]; then
-  log "timeout: main process did not exit after 30s"
-  exit 1
-fi
+# 清理（延迟）
+Start-Sleep -Seconds 2
+Remove-Item $backupPath -Force -ErrorAction SilentlyContinue
+Remove-Item $newExe -Force -ErrorAction SilentlyContinue
+`, exePath, pending.FilePath, pid)
 
-sleep 0.5
-
-# backup old app
-if [ -d "$TARGET_APP" ]; then
-  log "backup old app to $BACKUP_APP"
-  rm -rf "$BACKUP_APP" 2>/dev/null || true
-  mv "$TARGET_APP" "$BACKUP_APP"
-fi
-
-# replace with new app
-log "replace new app to $TARGET_APP"
-if ! mv "$NEW_APP" "$TARGET_APP"; then
-  log "replace failed, rollback"
-  if [ -d "$BACKUP_APP" ]; then
-    mv "$BACKUP_APP" "$TARGET_APP" 2>/dev/null || true
-  fi
-  exit 1
-fi
-
-# remove quarantine attribute
-if command -v xattr >/dev/null 2>&1; then
-  log "remove quarantine attribute"
-  xattr -cr "$TARGET_APP" 2>/dev/null || log "remove quarantine failed (ignored)"
-fi
-
-log "relaunch app"
-if ! open -n -a "$TARGET_APP" >/dev/null 2>&1; then
-  log "warning: open command failed, app may not have launched"
-  log "backup preserved at: $BACKUP_APP"
-  exit 1
-fi
-log "relaunch ok"
-
-# P1-5: 成功后清理 pending 标记
-if [ -f "$PENDING_FILE" ]; then
-  rm -f "$PENDING_FILE" 2>/dev/null || true
-  log "cleanup pending"
-fi
-
-sleep 2
-rm -rf "$BACKUP_APP" 2>/dev/null || true
-log "cleanup backup"
-
-log "cleanup temp dir $EXTRACT_DIR"
-rm -rf "$EXTRACT_DIR" 2>/dev/null || true
-
-log "cleanup script $0"
-rm -f "$0" 2>/dev/null || true
-
-# cleanup_lock 由 EXIT trap 自动调用，无需手动调用
-log "update completed"
-exit 0
-`
-
-	if err := os.WriteFile(scriptPath, []byte(bashScript), 0o755); err != nil {
-		_ = os.RemoveAll(extractDir)
-		return fmt.Errorf("写入更新脚本失败: %w", err)
-	}
-	if err := os.Chmod(scriptPath, 0o755); err != nil {
-		_ = os.RemoveAll(extractDir)
-		return fmt.Errorf("设置更新脚本执行权限失败: %w", err)
+	scriptPath := filepath.Join(us.dataDir, "update.ps1")
+	if err := os.WriteFile(scriptPath, []byte(script), 0644); err != nil {
+		return err
 	}
 
-	log.Printf("[UpdateService] 已创建 macOS 更新脚本: %s", scriptPath)
-
-	cmd := exec.Command(
-		"/bin/bash",
-		scriptPath,
-		fmt.Sprint(pid),
-		targetAppPath,
-		newAppPath,
-		backupAppPath,
-		extractDir,
-		logFile,
-		pendingFile,
-		lockFile,
+	cmd := exec.Command("powershell.exe",
+		"-NoProfile",
+		"-NonInteractive",
+		"-ExecutionPolicy", "Bypass",
+		"-File", scriptPath,
 	)
-	if err := cmd.Start(); err != nil {
-		_ = os.RemoveAll(extractDir)
-		return fmt.Errorf("启动更新脚本失败: %w", err)
-	}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
-	log.Printf("[UpdateService] 更新脚本已启动 (PID=%d)，准备退出主程序...", cmd.Process.Pid)
-
-	// P1-5: 不再在此处调用 clearPendingState()，由脚本负责
-	// P1-2 修复：不再提前释放更新锁，由脚本在成功/失败时统一清理
-
-	os.Exit(0)
-	return nil
+	return cmd.Start()
 }
 
-// findNewAppBundle 在解压目录中查找 .app 包
-// 优先策略：1) 同名优先 2) 浅层优先 3) 递归查找
-func findNewAppBundle(extractDir, preferredName string) (string, error) {
-	// 1. 根目录同名优先
-	if preferredName != "" {
-		candidate := filepath.Join(extractDir, preferredName)
-		if fi, err := os.Stat(candidate); err == nil && fi.IsDir() {
-			log.Printf("[UpdateService] 找到同名 .app: %s", candidate)
-			return candidate, nil
-		}
-	}
-
-	var candidates []string
-
-	// 2. 根目录直接 .app
-	entries, err := os.ReadDir(extractDir)
+// launchMacOSUpdater macOS 更新器
+func (us *UpdateService) launchMacOSUpdater(pending *PendingApply) error {
+	// 获取当前 .app 路径
+	exePath, err := os.Executable()
 	if err != nil {
-		return "", fmt.Errorf("读取解压目录失败: %w", err)
+		return err
 	}
 
-	for _, e := range entries {
-		if e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".app") {
-			candidates = append(candidates, filepath.Join(extractDir, e.Name()))
-		}
-	}
-
-	// 3. 一层子目录内的 .app
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		subDir := filepath.Join(extractDir, e.Name())
-		subEntries, err := os.ReadDir(subDir)
-		if err != nil {
-			continue
-		}
-		for _, se := range subEntries {
-			if se.IsDir() && strings.HasSuffix(strings.ToLower(se.Name()), ".app") {
-				candidates = append(candidates, filepath.Join(subDir, se.Name()))
-			}
-		}
-	}
-
-	// 4. 兜底递归，遇到 .app 就停止深入（避免 helper app）
-	if len(candidates) == 0 {
-		filepath.WalkDir(extractDir, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil
-			}
-			if d.IsDir() && strings.HasSuffix(strings.ToLower(d.Name()), ".app") {
-				candidates = append(candidates, path)
-				return filepath.SkipDir
-			}
-			return nil
-		})
-	}
-
-	if len(candidates) == 0 {
-		return "", fmt.Errorf("解压后未找到新的 .app 包（目录=%s）", extractDir)
-	}
-
-	// 5. 选择策略：同名优先；否则选择最浅层（路径深度最小）
-	selected := candidates[0]
-	minDepth := strings.Count(strings.TrimPrefix(selected, extractDir), string(os.PathSeparator))
-
-	for _, cand := range candidates[1:] {
-		depth := strings.Count(strings.TrimPrefix(cand, extractDir), string(os.PathSeparator))
-		if depth < minDepth {
-			selected = cand
-			minDepth = depth
-		}
-	}
-
-	log.Printf("[UpdateService] 从 %d 个候选中选择: %s (深度=%d)", len(candidates), selected, minDepth)
-	return selected, nil
-}
-
-// safeUnzip 安全解压 ZIP 文件（防止 Zip-Slip 路径穿越攻击）
-// P1-6 修复：用 Go archive/zip 替代系统 unzip 命令
-func safeUnzip(zipPath, destDir string) error {
-	r, err := zip.OpenReader(zipPath)
-	if err != nil {
-		return fmt.Errorf("打开 ZIP 文件失败: %w", err)
-	}
-	defer r.Close()
-
-	// 确保目标目录是绝对路径并以路径分隔符结尾
-	destDir, err = filepath.Abs(destDir)
-	if err != nil {
-		return fmt.Errorf("解析目标目录失败: %w", err)
-	}
-	destDir = filepath.Clean(destDir) + string(os.PathSeparator)
-
-	for _, f := range r.File {
-		// 清理文件名，防止路径穿越
-		name := filepath.FromSlash(f.Name)
-		name = filepath.Clean(name)
-
-		// 拒绝绝对路径
-		if filepath.IsAbs(name) {
-			log.Printf("[UpdateService] ⚠️ 跳过绝对路径: %s", f.Name)
-			continue
-		}
-
-		// 拒绝 .. 开头的路径（路径穿越）
-		if strings.HasPrefix(name, ".."+string(os.PathSeparator)) || name == ".." {
-			log.Printf("[UpdateService] ⚠️ 跳过路径穿越: %s", f.Name)
-			continue
-		}
-
-		targetPath := filepath.Join(destDir, name)
-
-		// 二次校验：确保目标路径在 destDir 内
-		if !strings.HasPrefix(targetPath, destDir) {
-			log.Printf("[UpdateService] ⚠️ 跳过逃逸路径: %s -> %s", f.Name, targetPath)
-			continue
-		}
-
-		// 拒绝符号链接
-		if f.Mode()&os.ModeSymlink != 0 {
-			log.Printf("[UpdateService] ⚠️ 跳过符号链接: %s", f.Name)
-			continue
-		}
-
-		if f.FileInfo().IsDir() {
-			// 创建目录
-			if err := os.MkdirAll(targetPath, f.Mode()|0o755); err != nil {
-				return fmt.Errorf("创建目录失败 %s: %w", targetPath, err)
-			}
-			continue
-		}
-
-		// 确保父目录存在
-		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
-			return fmt.Errorf("创建父目录失败 %s: %w", filepath.Dir(targetPath), err)
-		}
-
-		// 解压文件
-		rc, err := f.Open()
-		if err != nil {
-			return fmt.Errorf("打开 ZIP 条目失败 %s: %w", f.Name, err)
-		}
-
-		outFile, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
-		if err != nil {
-			rc.Close()
-			return fmt.Errorf("创建文件失败 %s: %w", targetPath, err)
-		}
-
-		_, err = io.Copy(outFile, rc)
-		rc.Close()
-		outFile.Close()
-
-		if err != nil {
-			return fmt.Errorf("写入文件失败 %s: %w", targetPath, err)
-		}
-	}
-
-	return nil
-}
-
-// applyUpdateLinux Linux 平台更新（脚本方式，避免 ETXTBSY）
-func (us *UpdateService) applyUpdateLinux(appImagePath string) error {
-	// 1. SHA256 校验
-	us.mu.Lock()
-	var expectedHash string
-	if us.latestUpdateInfo != nil {
-		expectedHash = us.latestUpdateInfo.SHA256
-	}
-	us.mu.Unlock()
-
-	if expectedHash != "" {
-		actualHash, err := calculateSHA256(appImagePath)
-		if err != nil {
-			return fmt.Errorf("计算 SHA256 失败: %w", err)
-		}
-		if !strings.EqualFold(actualHash, expectedHash) {
-			return fmt.Errorf("SHA256 校验失败: 期望 %s, 实际 %s", expectedHash, actualHash)
-		}
-		log.Println("[UpdateService] SHA256 校验通过")
-	}
-
-	// 2. ELF 格式校验
-	f, err := os.Open(appImagePath)
-	if err != nil {
-		return fmt.Errorf("无法打开 AppImage: %w", err)
-	}
-	magic := make([]byte, 4)
-	_, err = f.Read(magic)
-	f.Close()
-	if err != nil || magic[0] != 0x7F || magic[1] != 'E' || magic[2] != 'L' || magic[3] != 'F' {
-		return fmt.Errorf("无效的 AppImage 格式（非 ELF）")
-	}
-
-	// 3. 获取当前可执行文件路径
-	currentExe, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("获取当前可执行文件路径失败: %w", err)
-	}
-	if resolved, err := filepath.EvalSymlinks(currentExe); err == nil {
-		currentExe = resolved
-	}
-
-	// AppImage 运行时 os.Executable() 返回 /tmp/.mount_* 内部路径
-	// 仅当检测到 AppImage 挂载特征时才信任 APPIMAGE 环境变量
-	targetExe := currentExe
-	appimageEnv := strings.TrimSpace(os.Getenv("APPIMAGE"))
-	isAppImageMount := strings.Contains(currentExe, "/.mount_") // 支持 $TMPDIR 不同于 /tmp 的情况
-
-	if isAppImageMount && appimageEnv != "" && filepath.IsAbs(appimageEnv) {
-		// 确保 APPIMAGE 不指向挂载内部（避免误覆盖内层文件）
-		if !strings.Contains(appimageEnv, "/.mount_") {
-			if resolved, err := filepath.EvalSymlinks(appimageEnv); err == nil {
-				appimageEnv = resolved
-			}
-			// 解析 symlink 后再次检查是否指向挂载内部
-			if strings.Contains(appimageEnv, "/.mount_") {
-				log.Printf("[UpdateService] APPIMAGE 解析后指向挂载内部，忽略: %s", appimageEnv)
-			} else if fi, statErr := os.Stat(appimageEnv); statErr == nil && !fi.IsDir() {
-				log.Printf("[UpdateService] 检测到 AppImage 挂载，使用 APPIMAGE 作为更新目标: %s (内部路径=%s)", appimageEnv, currentExe)
-				targetExe = appimageEnv
-			} else {
-				log.Printf("[UpdateService] APPIMAGE 无效 (%v)，回退使用内部路径: %s", statErr, currentExe)
-			}
-		} else {
-			log.Printf("[UpdateService] APPIMAGE 指向挂载内部，忽略: %s", appimageEnv)
-		}
-	} else if isAppImageMount {
-		log.Printf("[UpdateService] 检测到 AppImage 挂载但 APPIMAGE 未设置或无效，使用内部路径: %s", currentExe)
+	// 从 exe 路径推断 .app 路径
+	// 例如: /Applications/CodeSwitch.app/Contents/MacOS/CodeSwitch
+	appPath := exePath
+	if idx := strings.Index(exePath, ".app/"); idx != -1 {
+		appPath = exePath[:idx+4]
 	}
 
 	pid := os.Getpid()
-	parentDir := filepath.Dir(targetExe)
+	script := fmt.Sprintf(`#!/bin/bash
+set -e
 
-	// 4. 检查目标目录可写
-	testFile := filepath.Join(parentDir, fmt.Sprintf(".updateservice-write-test-%d", pid))
-	if err := os.WriteFile(testFile, []byte("test"), 0o644); err != nil {
-		log.Printf("[UpdateService] 目标目录不可写: %s, err=%v", parentDir, err)
-		return fmt.Errorf("目标目录不可写，无法自动更新到 %s，请手动替换或使用管理员权限", parentDir)
-	}
-	_ = os.Remove(testFile)
+OLD_APP="%s"
+NEW_APP="%s"
+PID=%d
+MAX_WAIT=60
 
-	// 5. 构建 bash 脚本
-	scriptPath := filepath.Join(us.updateDir, fmt.Sprintf("update-linux-%d.sh", time.Now().UnixNano()))
-	logFile := filepath.Join(us.updateDir, "update-linux.log")
-	backupPath := targetExe + ".old"
-
-	// P1-5: 获取 pending 和 lock 文件路径
-	pendingFile := filepath.Join(filepath.Dir(us.stateFile), ".pending-update")
-	lockFile := filepath.Join(us.updateDir, "update.lock")
-
-	bashScript := `#!/bin/bash
-set -euo pipefail
-
-PID="$1"
-TARGET_EXE="$2"
-NEW_EXE="$3"
-BACKUP_EXE="$4"
-LOG_FILE="$5"
-PENDING_FILE="$6"
-LOCK_FILE="$7"
-
-log() {
-  echo "[update-linux] $(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG_FILE"
-}
-
-# P1-5: 总是清理 lock 文件（无论成功失败）
-cleanup_lock() {
-  if [ -f "$LOCK_FILE" ]; then
-    rm -f "$LOCK_FILE" 2>/dev/null || true
-    log "cleanup lock"
-  fi
-}
-
-# 使用 EXIT trap 确保任何退出路径都会清理 lock（包括 exit 1）
-trap 'rc=$?; if [ $rc -ne 0 ]; then log "script exit with error, code=$rc"; fi; cleanup_lock' EXIT
-
-log "start update: pid=$PID target=$TARGET_EXE new=$NEW_EXE backup=$BACKUP_EXE"
-
-# Linux-specific PPID detection using /proc (more reliable than ps -o)
-get_ppid() {
-  if [ -r "/proc/$$/stat" ]; then
-    # /proc/$$/stat format: pid (comm) state ppid ...
-    # comm may contain spaces/parens, so we strip everything up to ") " first
-    local stat_content
-    stat_content="$(cat /proc/$$/stat 2>/dev/null || true)"
-    if [ -n "$stat_content" ]; then
-      # Remove "pid (comm) " prefix, then get first field (state), second is ppid
-      local after_comm="${stat_content#*) }"
-      echo "$after_comm" | cut -d' ' -f2
-      return
+# 等待旧进程退出
+waited=0
+while [ $waited -lt $MAX_WAIT ]; do
+    if ! kill -0 $PID 2>/dev/null; then
+        break
     fi
-  fi
-  # Fallback to ps
-  ps -o ppid= -p "$$" 2>/dev/null | tr -d '[:space:]' || true
-}
-
-# Get initial PPID to verify parent-child relationship
-PPID_INIT="$(get_ppid)"
-USE_PPID_CHECK=0
-if [ -n "$PPID_INIT" ] && [ "$PPID_INIT" = "$PID" ]; then
-  USE_PPID_CHECK=1
-  log "PPID check enabled: initial ppid=$PPID_INIT matches target pid=$PID"
-else
-  log "PPID check disabled: initial ppid=${PPID_INIT:-unknown} != target pid=$PID, using kill -0 only"
-fi
-
-# Wait for main process to exit (max ~30 seconds)
-# Single loop: check both kill -0 and PPID change
-exit_ok=0
-for i in {1..300}; do
-  # Primary check: process no longer exists
-  if ! kill -0 "$PID" 2>/dev/null; then
-    exit_ok=1
-    log "main process exited (kill -0 failed)"
-    break
-  fi
-  # Secondary check: PPID changed (if enabled)
-  if [ "$USE_PPID_CHECK" -eq 1 ]; then
-    PPID_NOW="$(get_ppid)"
-    if [ -n "$PPID_NOW" ] && [ "$PPID_NOW" != "$PID" ]; then
-      exit_ok=1
-      log "main process exited (ppid changed: $PPID_INIT -> $PPID_NOW)"
-      break
-    fi
-  fi
-  sleep 0.1
+    sleep 0.5
+    waited=$((waited + 1))
 done
 
-if [ "$exit_ok" -ne 1 ]; then
-  log "timeout: main process did not exit after 30s"
-  exit 1
+if [ $waited -ge $MAX_WAIT ]; then
+    echo "Timeout waiting for process to exit" >&2
+    exit 1
 fi
 
-sleep 0.5
+# 同目录 staging（确保同卷）
+STAGING_PATH="${OLD_APP}.new"
+ditto "$NEW_APP" "$STAGING_PATH"
 
-# backup old executable
-if [ -f "$TARGET_EXE" ]; then
-  log "backup old executable to $BACKUP_EXE"
-  rm -f "$BACKUP_EXE" 2>/dev/null || true
-  mv "$TARGET_EXE" "$BACKUP_EXE"
+# 移除 quarantine
+xattr -dr com.apple.quarantine "$STAGING_PATH" 2>/dev/null || true
+
+# 重命名交换
+BACKUP_PATH="${OLD_APP}.old"
+if [ -d "$BACKUP_PATH" ]; then
+    rm -rf "$BACKUP_PATH"
 fi
+mv "$OLD_APP" "$BACKUP_PATH"
+mv "$STAGING_PATH" "$OLD_APP"
 
-# copy new executable (mv may fail across filesystems)
-log "copy new executable to $TARGET_EXE"
-if ! cp "$NEW_EXE" "$TARGET_EXE"; then
-  log "copy failed, rollback"
-  if [ -f "$BACKUP_EXE" ]; then
-    mv "$BACKUP_EXE" "$TARGET_EXE" 2>/dev/null || true
-  fi
-  exit 1
-fi
+# 启动新版本
+open "$OLD_APP"
 
-# set executable permission
-chmod 755 "$TARGET_EXE"
-
+# 清理
 sleep 2
-rm -f "$BACKUP_EXE" 2>/dev/null || true
-rm -f "$NEW_EXE" 2>/dev/null || true
+rm -rf "$BACKUP_PATH"
+rm -rf "$NEW_APP"
+`, appPath, pending.FilePath, pid)
 
-log "relaunch app"
-nohup "$TARGET_EXE" >/dev/null 2>&1 &
-
-# P1-5: 成功后清理 pending 标记
-if [ -f "$PENDING_FILE" ]; then
-  rm -f "$PENDING_FILE" 2>/dev/null || true
-  log "cleanup pending"
-fi
-
-log "cleanup script $0"
-rm -f "$0" 2>/dev/null || true
-
-# cleanup_lock 由 EXIT trap 自动调用，无需手动调用
-log "update completed"
-exit 0
-`
-
-	if err := os.WriteFile(scriptPath, []byte(bashScript), 0o755); err != nil {
-		return fmt.Errorf("写入更新脚本失败: %w", err)
-	}
-	if err := os.Chmod(scriptPath, 0o755); err != nil {
-		return fmt.Errorf("设置更新脚本执行权限失败: %w", err)
+	scriptPath := filepath.Join(us.dataDir, "update.sh")
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		return err
 	}
 
-	log.Printf("[UpdateService] 已创建 Linux 更新脚本: %s", scriptPath)
+	cmd := exec.Command("/bin/bash", scriptPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
-	// 查找 bash 路径（兼容 NixOS 等非标准 FHS 发行版）
-	bashPath, lookErr := exec.LookPath("bash")
-	if lookErr != nil {
-		bashPath = "/bin/bash" // 兼容旧系统的默认路径
-	}
-	if _, statErr := os.Stat(bashPath); statErr != nil {
-		return fmt.Errorf("未找到 bash（需要 bash 执行更新脚本），请手动替换 AppImage")
-	}
-	log.Printf("[UpdateService] 使用 bash: %s", bashPath)
-
-	cmd := exec.Command(
-		bashPath,
-		scriptPath,
-		fmt.Sprint(pid),
-		targetExe,
-		appImagePath,
-		backupPath,
-		logFile,
-		pendingFile,
-		lockFile,
-	)
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("启动更新脚本失败: %w", err)
-	}
-
-	log.Printf("[UpdateService] 更新脚本已启动 (PID=%d)，准备退出主程序...", cmd.Process.Pid)
-
-	// P1-5: 不再在此处调用 clearPendingState()，由脚本负责
-	// P1-2 修复：不再提前释放更新锁，由脚本在成功/失败时统一清理
-
-	os.Exit(0)
-	return nil
+	return cmd.Start()
 }
 
-// cleanupOldBackups 清理旧备份文件，保留最近 n 个
-func (us *UpdateService) cleanupOldBackups(dir, pattern string, keep int) {
-	matches, _ := filepath.Glob(filepath.Join(dir, pattern))
-	if len(matches) <= keep {
+// launchLinuxUpdater Linux 更新器
+func (us *UpdateService) launchLinuxUpdater(pending *PendingApply) error {
+	// AppImage 更新
+	exePath, err := os.Executable()
+	if err != nil {
+		return err
+	}
+
+	pid := os.Getpid()
+	script := fmt.Sprintf(`#!/bin/bash
+set -e
+
+OLD_APP="%s"
+NEW_APP="%s"
+PID=%d
+MAX_WAIT=60
+
+# 等待旧进程退出
+waited=0
+while [ $waited -lt $MAX_WAIT ]; do
+    if ! kill -0 $PID 2>/dev/null; then
+        break
+    fi
+    sleep 0.5
+    waited=$((waited + 1))
+done
+
+if [ $waited -ge $MAX_WAIT ]; then
+    echo "Timeout waiting for process to exit" >&2
+    exit 1
+fi
+
+# 备份并替换
+BACKUP_PATH="${OLD_APP}.old"
+cp "$OLD_APP" "$BACKUP_PATH"
+cp "$NEW_APP" "$OLD_APP"
+chmod +x "$OLD_APP"
+
+# 启动新版本
+"$OLD_APP" &
+
+# 清理
+sleep 2
+rm -f "$BACKUP_PATH"
+rm -f "$NEW_APP"
+`, exePath, pending.FilePath, pid)
+
+	scriptPath := filepath.Join(us.dataDir, "update.sh")
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		return err
+	}
+
+	cmd := exec.Command("/bin/bash", scriptPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	return cmd.Start()
+}
+
+// checkPendingApply 启动时检查待应用的更新
+func (us *UpdateService) checkPendingApply() {
+	pendingPath := filepath.Join(us.dataDir, "pending_apply.json")
+	data, err := os.ReadFile(pendingPath)
+	if err != nil {
+		return // 无待应用更新
+	}
+
+	var pending PendingApply
+	if err := json.Unmarshal(data, &pending); err != nil {
+		os.Remove(pendingPath)
 		return
 	}
 
-	// 按修改时间排序（新 → 旧）
-	sort.Slice(matches, func(i, j int) bool {
-		fi, _ := os.Stat(matches[i])
-		fj, _ := os.Stat(matches[j])
-		if fi == nil || fj == nil {
-			return false
-		}
-		return fi.ModTime().After(fj.ModTime())
-	})
+	// 检查是否更新成功
+	if us.isNewerOrEqualVersion(pending.TargetVersion) {
+		// 更新成功，清理
+		os.Remove(pendingPath)
+		os.Remove(pending.FilePath)
 
-	// 删除旧的
-	for _, f := range matches[keep:] {
-		os.Remove(f)
-		log.Printf("[UpdateService] 清理旧备份: %s", f)
-	}
-}
-
-// RestartApp 重启应用
-// 如果有待安装的更新，会先触发更新流程（Windows 安装版会请求 UAC）
-func (us *UpdateService) RestartApp() error {
-	// 有待安装的更新时直接触发安装（Windows 安装版会请求 UAC）
-	if err := us.ApplyUpdate(); err != nil {
-		log.Printf("[UpdateService] 应用更新失败，将执行普通重启: %v", err)
+		// 清理下载目录
+		downloadsDir := filepath.Join(us.dataDir, "downloads")
+		os.RemoveAll(downloadsDir)
+		return
 	}
 
-	// ApplyUpdate 在成功安装更新时会退出进程；走到这里说明没有待安装任务或更新失败
-	executable, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("获取可执行文件路径失败: %w", err)
-	}
-
-	switch runtime.GOOS {
-	case "windows":
-		cmd := hideWindowCmd(executable)
-		if err := cmd.Start(); err != nil {
-			return fmt.Errorf("启动新进程失败: %w", err)
-		}
-		os.Exit(0)
-
-	case "darwin":
-		// P1-8 修复：macOS 重启应定位 .app 并使用 open -n -a
-		appPath := executable
-		for i := 0; i < 6; i++ {
-			if strings.HasSuffix(strings.ToLower(appPath), ".app") {
-				break
-			}
-			parent := filepath.Dir(appPath)
-			if parent == appPath {
-				break
-			}
-			appPath = parent
-		}
-
-		var cmd *exec.Cmd
-		if strings.HasSuffix(strings.ToLower(appPath), ".app") {
-			// 使用 open -n -a 启动 .app 包
-			cmd = exec.Command("/usr/bin/open", "-n", "-a", appPath)
-			log.Printf("[UpdateService] macOS 重启: open -n -a %s", appPath)
-		} else {
-			// 回退到直接启动可执行文件
-			cmd = exec.Command("/usr/bin/open", "-n", executable)
-			log.Printf("[UpdateService] macOS 重启: open -n %s", executable)
-		}
-
-		if err := cmd.Start(); err != nil {
-			return fmt.Errorf("启动新进程失败: %w", err)
-		}
-		os.Exit(0)
-
-	case "linux":
-		// P1-8 修复：Linux AppImage 重启应使用 APPIMAGE 外层路径
-		restartPath := executable
-		appimageEnv := strings.TrimSpace(os.Getenv("APPIMAGE"))
-		isAppImageMount := strings.Contains(executable, "/.mount_")
-
-		if isAppImageMount && appimageEnv != "" && filepath.IsAbs(appimageEnv) {
-			if !strings.Contains(appimageEnv, "/.mount_") {
-				if fi, err := os.Stat(appimageEnv); err == nil && !fi.IsDir() {
-					restartPath = appimageEnv
-					log.Printf("[UpdateService] Linux 重启: 使用 APPIMAGE 路径 %s", restartPath)
+	// 更新未成功（可能用户取消了安装）
+	// 如果下载文件还在且校验通过，恢复到 ready 状态
+	if pending.FilePath != "" {
+		if _, err := os.Stat(pending.FilePath); err == nil {
+			if pending.FileSHA256 != "" {
+				hash, _ := computeSHA256(pending.FilePath)
+				if strings.EqualFold(hash, pending.FileSHA256) {
+					us.state = StateReady
+					us.downloadState = &DownloadState{
+						TempFilePath:   pending.FilePath,
+						ExpectedSHA256: pending.FileSHA256,
+					}
+					us.targetInfo = &UpdateInfo{
+						Version: pending.TargetVersion,
+					}
+					return
 				}
 			}
 		}
-
-		cmd := exec.Command(restartPath)
-		if err := cmd.Start(); err != nil {
-			return fmt.Errorf("启动新进程失败: %w", err)
-		}
-		os.Exit(0)
 	}
 
-	return nil
+	// 文件不存在或校验失败，清理并回到 idle
+	os.Remove(pendingPath)
+	os.Remove(pending.FilePath)
 }
 
-// StartDailyCheck 启动每日8点定时检查
-// P1-3 修复：单次持锁完成检查+调度，消除竞态窗口
-func (us *UpdateService) StartDailyCheck() {
+// ==================== 辅助方法 ====================
+
+// detectPolicy 检测更新策略
+func (us *UpdateService) detectPolicy() UpdatePolicy {
 	us.mu.Lock()
 	defer us.mu.Unlock()
+	return us.detectPolicyLocked()
+}
 
-	// 停止旧定时器
-	if us.dailyCheckTimer != nil {
-		us.dailyCheckTimer.Stop()
-		us.dailyCheckTimer = nil
+// detectPolicyLocked 检测更新策略（需持有锁）
+func (us *UpdateService) detectPolicyLocked() UpdatePolicy {
+	// 可以通过构建时注入 UpdatePolicy 变量来覆盖
+	// 这里实现运行时检测
+
+	exePath, err := os.Executable()
+	if err != nil {
+		return PolicyPortable // 默认便携版
 	}
 
-	if !us.autoCheckEnabled {
-		log.Println("[UpdateService] 自动检查已禁用，不启动定时器")
-		return
-	}
+	// Windows: 检查是否在 Program Files
+	if runtime.GOOS == "windows" {
+		programFiles := os.Getenv("ProgramFiles")
+		programFilesX86 := os.Getenv("ProgramFiles(x86)")
+		exePathLower := strings.ToLower(exePath)
 
-	// 注意：calculateNextCheckDuration 不访问共享状态，无需加锁
-	duration := us.calculateNextCheckDuration()
-
-	us.dailyCheckTimer = time.AfterFunc(duration, func() {
-		// 检查是否仍然启用
-		us.mu.Lock()
-		enabled := us.autoCheckEnabled
-		us.mu.Unlock()
-
-		if !enabled {
-			log.Println("[UpdateService] 自动检查已禁用，跳过本次检查")
-			return
+		if (programFiles != "" && strings.HasPrefix(exePathLower, strings.ToLower(programFiles))) ||
+			(programFilesX86 != "" && strings.HasPrefix(exePathLower, strings.ToLower(programFilesX86))) {
+			// 在 Program Files，但还需验证是否可写
+			if !us.canWriteToDir(filepath.Dir(exePath)) {
+				return PolicyInstaller
+			}
 		}
-
-		us.performDailyCheck()
-		us.StartDailyCheck() // 重新调度下次检查
-	})
-
-	log.Printf("[UpdateService] 定时检查已启动，下次检查时间: %s", time.Now().Add(duration).Format("2006-01-02 15:04:05"))
-}
-
-// StopDailyCheck 停止定时检查（公开方法，供外部调用）
-// P1-3 修复：对 dailyCheckTimer 访问加锁
-func (us *UpdateService) StopDailyCheck() {
-	us.mu.Lock()
-	defer us.mu.Unlock()
-
-	if us.dailyCheckTimer != nil {
-		us.dailyCheckTimer.Stop()
-		us.dailyCheckTimer = nil
-	}
-}
-
-// calculateNextCheckDuration 计算距离下一个8点的时长
-func (us *UpdateService) calculateNextCheckDuration() time.Duration {
-	now := time.Now()
-
-	// 今天早上8点
-	next := time.Date(now.Year(), now.Month(), now.Day(), 8, 0, 0, 0, now.Location())
-
-	// 如果已经过了今天8点，调整到明天8点
-	if now.After(next) {
-		next = next.Add(24 * time.Hour)
 	}
 
-	return next.Sub(now)
+	// 其他情况：检查目录是否可写
+	if us.canWriteToDir(filepath.Dir(exePath)) {
+		return PolicyPortable
+	}
+
+	return PolicyInstaller
 }
 
-// performDailyCheck 执行每日检查（带重试）
-func (us *UpdateService) performDailyCheck() {
-	log.Println("[UpdateService] 开始每日定时检查更新...")
+// canWriteToDir 检查目录是否可写
+func (us *UpdateService) canWriteToDir(dir string) bool {
+	testFile := filepath.Join(dir, ".write-test-"+fmt.Sprintf("%d", time.Now().UnixNano()))
 
-	var updateInfo *UpdateInfo
-	var err error
+	// 尝试创建文件
+	f, err := os.Create(testFile)
+	if err != nil {
+		return false
+	}
+	f.Close()
 
-	// 重试机制：最多3次，间隔5分钟
+	// 尝试重命名（模拟替换操作）
+	testFile2 := testFile + ".renamed"
+	if err := os.Rename(testFile, testFile2); err != nil {
+		os.Remove(testFile)
+		return false
+	}
+
+	os.Remove(testFile2)
+	return true
+}
+
+// isNewerVersion 检查是否是更新版本
+func (us *UpdateService) isNewerVersion(version string) bool {
+	return compareVersions(version, us.currentVersion) > 0
+}
+
+// isNewerOrEqualVersion 检查是否是更新或相同版本
+func (us *UpdateService) isNewerOrEqualVersion(version string) bool {
+	return compareVersions(us.currentVersion, version) >= 0
+}
+
+// compareVersions 比较两个语义化版本号
+// 返回：1 如果 a > b，-1 如果 a < b，0 如果相等
+func compareVersions(a, b string) int {
+	a = strings.TrimPrefix(a, "v")
+	b = strings.TrimPrefix(b, "v")
+
+	partsA := strings.Split(a, ".")
+	partsB := strings.Split(b, ".")
+
+	// 确保至少有 3 个部分
+	for len(partsA) < 3 {
+		partsA = append(partsA, "0")
+	}
+	for len(partsB) < 3 {
+		partsB = append(partsB, "0")
+	}
+
 	for i := 0; i < 3; i++ {
-		updateInfo, err = us.CheckUpdate()
-
-		if err == nil {
-			// 检查成功
-			us.mu.Lock()
-			us.lastCheckTime = time.Now()
-			us.checkFailures = 0
-			us.mu.Unlock()
-			us.SaveState()
-
-			if updateInfo.Available {
-				log.Printf("[UpdateService] 发现新版本 %s，开始下载...", updateInfo.Version)
-				go us.autoDownload()
-			} else {
-				log.Println("[UpdateService] 已是最新版本")
-			}
-			return
+		numA := parseVersionPart(partsA[i])
+		numB := parseVersionPart(partsB[i])
+		if numA > numB {
+			return 1
 		}
-
-		// 网络错误，记录日志
-		log.Printf("[UpdateService] 检查更新失败（第%d次）: %v", i+1, err)
-
-		us.mu.Lock()
-		us.checkFailures++
-		us.mu.Unlock()
-
-		if i < 2 { // 不是最后一次，等待后重试
-			time.Sleep(5 * time.Minute)
+		if numA < numB {
+			return -1
 		}
 	}
-
-	// 3次都失败，静默放弃
-	us.SaveState()
-	log.Println("[UpdateService] 检查更新失败，将在明天8点重试")
+	return 0
 }
 
-// autoDownload 自动下载更新（静默失败）
-func (us *UpdateService) autoDownload() {
-	err := us.DownloadUpdate(func(progress float64) {
-		log.Printf("[UpdateService] 下载进度: %.2f%%", progress)
-	})
+// parseVersionPart 解析版本号部分为整数
+func parseVersionPart(s string) int {
+	// 处理预发布标识符（如 1.0.0-alpha）
+	if idx := strings.Index(s, "-"); idx != -1 {
+		s = s[:idx]
+	}
+	var num int
+	fmt.Sscanf(s, "%d", &num)
+	return num
+}
 
-	if err != nil {
-		log.Printf("[UpdateService] 自动下载失败: %v", err)
+// getPlatformKey 获取平台标识符
+func (us *UpdateService) getPlatformKey() string {
+	os := runtime.GOOS
+	arch := runtime.GOARCH
+
+	// 映射到 latest.json 的 key
+	switch {
+	case os == "windows" && arch == "amd64":
+		// P2: 使用 cachedPolicy 避免无锁调用 detectPolicyLocked()
+		if us.cachedPolicy == string(PolicyInstaller) {
+			return "windows-x86_64-installer"
+		}
+		return "windows-x86_64"
+	case os == "darwin" && arch == "arm64":
+		return "darwin-aarch64"
+	case os == "darwin" && arch == "amd64":
+		return "darwin-x86_64"
+	case os == "linux" && arch == "amd64":
+		return "linux-x86_64"
+	default:
+		return fmt.Sprintf("%s-%s", os, arch)
+	}
+}
+
+// getAssetName 获取资产文件名（用于 GitHub API fallback）
+// version 参数应为 GitHub Release 的 tag_name，如 "v2.6.23"
+func (us *UpdateService) getAssetName(version string) string {
+	// 去除版本号前缀 v
+	v := strings.TrimPrefix(version, "v")
+
+	switch {
+	case runtime.GOOS == "windows" && runtime.GOARCH == "amd64":
+		// P2: 使用 cachedPolicy 避免无锁调用 detectPolicyLocked()
+		if us.cachedPolicy == string(PolicyInstaller) {
+			return fmt.Sprintf("CodeSwitch-v%s-amd64-installer.exe", v)
+		}
+		return fmt.Sprintf("CodeSwitch-v%s.exe", v)
+	case runtime.GOOS == "darwin" && runtime.GOARCH == "arm64":
+		return fmt.Sprintf("CodeSwitch-v%s-macos-arm64.zip", v)
+	case runtime.GOOS == "darwin" && runtime.GOARCH == "amd64":
+		return fmt.Sprintf("CodeSwitch-v%s-macos-amd64.zip", v)
+	case runtime.GOOS == "linux" && runtime.GOARCH == "amd64":
+		return fmt.Sprintf("CodeSwitch-v%s.AppImage", v)
+	default:
+		return ""
+	}
+}
+
+// emitState 发送状态事件（调用前必须持有锁）
+// 使用异步发送避免死锁
+func (us *UpdateService) emitState() {
+	if us.app == nil {
+		return
+	}
+	// 在持有锁时构建快照
+	snapshot := us.getStateLocked()
+	// 异步发送事件，避免在持有锁时阻塞
+	go us.app.Event.Emit("update:state", snapshot)
+}
+
+// emitStateUnlocked 发送状态事件（调用前不持有锁）
+func (us *UpdateService) emitStateUnlocked() {
+	if us.app == nil {
+		return
+	}
+	us.app.Event.Emit("update:state", us.GetState())
+}
+
+// getStateLocked 获取状态快照（调用前必须持有锁）
+func (us *UpdateService) getStateLocked() *UpdateStateSnapshot {
+	// 缓存 policy，避免在 detectPolicyLocked 中进行 I/O
+	policy := "auto"
+	if us.cachedPolicy != "" {
+		policy = us.cachedPolicy
+	}
+
+	snapshot := &UpdateStateSnapshot{
+		State:           us.state,
+		CurrentVersion:  us.currentVersion,
+		DownloadedBytes: us.downloadedBytes,
+		TotalBytes:      us.totalBytes,
+		Error:           us.lastError,
+		ErrorOp:         us.errorOp,
+		Policy:          policy,
+	}
+
+	if us.targetInfo != nil {
+		snapshot.LatestVersion = us.targetInfo.Version
+		snapshot.Notes = us.targetInfo.Notes
+		snapshot.DownloadURL = us.targetInfo.DownloadURL
+	}
+
+	if us.totalBytes > 0 {
+		snapshot.Progress = float64(us.downloadedBytes) / float64(us.totalBytes) * 100
+	}
+
+	return snapshot
+}
+
+// emitProgressThrottled 节流发送进度事件
+func (us *UpdateService) emitProgressThrottled(downloaded, total int64) {
+	if us.app == nil {
 		return
 	}
 
-	// DownloadUpdate 内部已调用 PrepareUpdate，无需重复调用
-	log.Println("[UpdateService] 更新已下载完成，等待用户重启应用")
-}
+	us.mu.Lock()
+	now := time.Now()
+	percent := 0
+	if total > 0 {
+		percent = int(downloaded * 100 / total)
+	}
 
-// CheckUpdateAsync 异步检查更新
-func (us *UpdateService) CheckUpdateAsync() {
-	go func() {
-		updateInfo, err := us.CheckUpdate()
-		if err != nil {
-			log.Printf("[UpdateService] 检查更新失败: %v", err)
-			us.mu.Lock()
-			us.checkFailures++
-			us.mu.Unlock()
-			us.SaveState()
-			return
-		}
-
-		us.mu.Lock()
-		us.lastCheckTime = time.Now()
-		us.checkFailures = 0
+	// 状态变更立即发送
+	if us.state != us.lastEmitState {
+		us.lastEmitTime = now
+		us.lastEmitPercent = percent
+		us.lastEmitState = us.state
 		us.mu.Unlock()
-		us.SaveState()
-
-		if updateInfo.Available {
-			log.Printf("[UpdateService] 发现新版本 %s", updateInfo.Version)
-			go us.autoDownload()
-		}
-	}()
-}
-
-// GetUpdateState 获取更新状态
-func (us *UpdateService) GetUpdateState() *UpdateState {
-	us.mu.Lock()
-	defer us.mu.Unlock()
-
-	return &UpdateState{
-		LastCheckTime:       us.lastCheckTime,
-		LastCheckSuccess:    us.checkFailures == 0,
-		ConsecutiveFailures: us.checkFailures,
-		LatestKnownVersion:  us.latestVersion,
-		DownloadProgress:    us.downloadProgress,
-		UpdateReady:         us.updateReady,
-		AutoCheckEnabled:    us.autoCheckEnabled, // 返回自动检查状态
+		us.app.Event.Emit("update:progress", map[string]interface{}{
+			"downloaded": downloaded,
+			"total":      total,
+			"percent":    percent,
+		})
+		return
 	}
-}
 
-// IsAutoCheckEnabled 是否启用自动检查
-func (us *UpdateService) IsAutoCheckEnabled() bool {
-	us.mu.Lock()
-	defer us.mu.Unlock()
-	return us.autoCheckEnabled
-}
+	// 节流检查
+	if now.Sub(us.lastEmitTime) < progressThrottle {
+		us.mu.Unlock()
+		return
+	}
+	if percent == us.lastEmitPercent {
+		us.mu.Unlock()
+		return
+	}
 
-// SetAutoCheckEnabled 设置是否启用自动检查
-func (us *UpdateService) SetAutoCheckEnabled(enabled bool) {
-	us.mu.Lock()
-	us.autoCheckEnabled = enabled
+	us.lastEmitTime = now
+	us.lastEmitPercent = percent
 	us.mu.Unlock()
 
-	if enabled {
-		us.StartDailyCheck()
-	} else {
-		us.StopDailyCheck()
-	}
-
-	us.SaveState()
+	us.app.Event.Emit("update:progress", map[string]interface{}{
+		"downloaded": downloaded,
+		"total":      total,
+		"percent":    percent,
+	})
 }
 
-// SaveState 保存状态（使用原子写入防止断电损坏）
-func (us *UpdateService) SaveState() error {
-	us.mu.Lock()
-	defer us.mu.Unlock()
-
-	state := UpdateState{
-		LastCheckTime:       us.lastCheckTime,
-		LastCheckSuccess:    us.checkFailures == 0,
-		ConsecutiveFailures: us.checkFailures,
-		LatestKnownVersion:  us.latestVersion,
-		DownloadProgress:    us.downloadProgress,
-		UpdateReady:         us.updateReady,
-		AutoCheckEnabled:    us.autoCheckEnabled, // 持久化自动检查开关
-	}
-
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return fmt.Errorf("序列化状态失败: %w", err)
-	}
-
-	// P1-1 修复：使用原子写入替代直接 WriteFile
-	return atomicWriteFile(us.stateFile, data, 0o644)
-}
-
-// LoadState 加载状态
-func (us *UpdateService) LoadState() error {
-	data, err := os.ReadFile(us.stateFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// 文件不存在，保存默认配置
-			_ = us.SaveState()
-			return nil
+// isURLAllowed 检查 URL 是否在白名单中
+func isURLAllowed(url string) bool {
+	for _, prefix := range allowedURLPrefixes {
+		if strings.HasPrefix(url, prefix) {
+			return true
 		}
-		return fmt.Errorf("读取状态文件失败: %w", err)
 	}
-
-	var state UpdateState
-	if err := json.Unmarshal(data, &state); err != nil {
-		return fmt.Errorf("解析状态失败: %w", err)
-	}
-
-	// 预先检查 pending 标记文件，避免在持锁状态下做文件 IO
-	pendingFile := filepath.Join(filepath.Dir(us.stateFile), ".pending-update")
-	pendingExists := false
-	if _, err := os.Stat(pendingFile); err == nil {
-		pendingExists = true
-	} else if err != nil && !os.IsNotExist(err) {
-		// 其他错误（权限/IO 等）时保守处理为不存在，避免误显示 Ready
-		log.Printf("[UpdateService] 检查 pending 标记失败: %v，将视为无待更新", err)
-	}
-
-	needSave := false
-
-	us.mu.Lock()
-	us.lastCheckTime = state.LastCheckTime
-	us.checkFailures = state.ConsecutiveFailures
-	us.latestVersion = state.LatestKnownVersion
-	us.downloadProgress = state.DownloadProgress
-
-	// 验证 updateReady 状态：pending 文件才是权威来源
-	switch {
-	case state.UpdateReady && !pendingExists:
-		// 状态文件显示 updateReady=true 但实际没有待更新文件，重置状态
-		log.Printf("[UpdateService] 检测到过期的 updateReady 状态，重置为 false")
-		us.updateReady = false
-		us.downloadProgress = 0
-		needSave = true
-	case !state.UpdateReady && pendingExists:
-		// pending 文件存在但状态为 false（可能是上次 SaveState 失败），修正为 true
-		log.Printf("[UpdateService] 检测到 pending 标记存在但状态为 false，修正为 true")
-		us.updateReady = true
-		if us.downloadProgress < 100 {
-			us.downloadProgress = 100
-		}
-		needSave = true
-	default:
-		us.updateReady = state.UpdateReady
-	}
-
-	// 检查文件中是否包含 auto_check_enabled 字段
-	// 如果包含，使用文件中的值；否则保持默认值 true（兼容老版本）
-	dataStr := string(data)
-	if strings.Contains(dataStr, "\"auto_check_enabled\"") {
-		// 文件中包含 auto_check_enabled 字段，使用文件中的值
-		us.autoCheckEnabled = state.AutoCheckEnabled
-	}
-	// 否则保持初始化时设置的默认值 true
-	us.mu.Unlock()
-
-	// 如果状态被修正，保存修正后的状态（需要在 unlock 后调用，避免死锁）
-	if needSave {
-		_ = us.SaveState()
-	}
-
-	return nil
+	return false
 }
 
-// copyUpdateFile 复制更新文件
-func copyUpdateFile(src, dst string) error {
-	source, err := os.Open(src)
+// getUpdateDataDir 获取更新数据目录
+func getUpdateDataDir() string {
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return err
+		return filepath.Join(".", ".code-switch-update")
 	}
-	defer source.Close()
-
-	destination, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer destination.Close()
-
-	_, err = io.Copy(destination, source)
-	return err
+	return filepath.Join(homeDir, ".code-switch", "update")
 }
 
-// calculateSHA256 计算文件 SHA256
-func calculateSHA256(filePath string) (string, error) {
-	file, err := os.Open(filePath)
+// computeSHA256 计算文件 SHA256
+func computeSHA256(path string) (string, error) {
+	f, err := os.Open(path)
 	if err != nil {
 		return "", err
-	}
-	defer file.Close()
-
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return "", err
-	}
-
-	return hex.EncodeToString(hash.Sum(nil)), nil
-}
-
-// ============================================================
-// 以下为 Windows 安装版静默更新相关方法
-// ============================================================
-
-// acquireUpdateLock 获取更新锁（防止并发更新）
-func (us *UpdateService) acquireUpdateLock() error {
-	lockPath := filepath.Join(us.updateDir, "update.lock")
-
-	// 最多尝试 2 次（初次 + 删除过期锁后重试）
-	for attempt := 0; attempt < 2; attempt++ {
-		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
-		if err == nil {
-			// 成功获取锁，写入 PID 和时间戳
-			if _, writeErr := fmt.Fprintf(f, "%d\n%s", os.Getpid(), time.Now().Format(time.RFC3339)); writeErr != nil {
-				f.Close()
-				os.Remove(lockPath)
-				return fmt.Errorf("写入锁文件失败: %w", writeErr)
-			}
-			if closeErr := f.Close(); closeErr != nil {
-				os.Remove(lockPath)
-				return fmt.Errorf("关闭锁文件失败: %w", closeErr)
-			}
-			us.mu.Lock()
-			us.lockFile = lockPath
-			us.mu.Unlock()
-			log.Printf("[UpdateService] 已获取更新锁: %s", lockPath)
-			return nil
-		}
-
-		if !os.IsExist(err) {
-			return fmt.Errorf("创建锁文件失败: %w", err)
-		}
-
-		// 锁文件已存在，检查是否过期
-		info, statErr := os.Stat(lockPath)
-		if statErr != nil {
-			// stat 失败，锁可能已被删除，重试
-			continue
-		}
-
-		// P1-6: 增加阈值到 30 分钟，因为：
-		// - 3 次下载重试 × 5 分钟 HTTP 超时 = 15 分钟
-		// - 重试退避 (2s + 4s) = 6 秒
-		// - SHA256 校验 + prepare = ~1-2 分钟
-		// - I/O 延迟/杀毒软件缓冲 = ~10 分钟
-		// 总计最大锁持有时间: ~17 分钟，30 分钟提供安全余量
-		if time.Since(info.ModTime()) > 30*time.Minute {
-			log.Printf("[UpdateService] 检测到过期锁文件（超过30分钟，mtime=%v），强制删除: %s",
-				info.ModTime().Format(time.RFC3339), lockPath)
-			if rmErr := os.Remove(lockPath); rmErr != nil {
-				return fmt.Errorf("删除过期锁文件失败: %w", rmErr)
-			}
-			continue // 重试获取
-		}
-
-		return fmt.Errorf("另一个更新正在进行中")
-	}
-
-	return fmt.Errorf("获取更新锁失败：重试次数耗尽")
-}
-
-// releaseUpdateLock 释放更新锁
-func (us *UpdateService) releaseUpdateLock() {
-	us.mu.Lock()
-	lockFile := us.lockFile
-	us.lockFile = ""
-	us.mu.Unlock()
-
-	if lockFile != "" {
-		if err := os.Remove(lockFile); err != nil {
-			log.Printf("[UpdateService] 释放锁文件失败: %v", err)
-		} else {
-			log.Printf("[UpdateService] 已释放更新锁: %s", lockFile)
-		}
-	}
-}
-
-// downloadAndVerify 下载文件并验证 SHA256
-func (us *UpdateService) downloadAndVerify(assetName string) (string, error) {
-	releaseBaseURL := "https://github.com/Rogers-F/code-switch-R/releases/download"
-
-	// 检查版本是否已设置
-	us.mu.Lock()
-	version := us.latestVersion
-	us.mu.Unlock()
-	if version == "" {
-		return "", fmt.Errorf("latestVersion 未设置，请先调用 CheckUpdate")
-	}
-
-	// 1. 下载主文件
-	mainURL := fmt.Sprintf("%s/%s/%s", releaseBaseURL, version, assetName)
-	mainPath := filepath.Join(us.updateDir, assetName)
-
-	log.Printf("[UpdateService] 下载文件: %s", mainURL)
-	if err := us.downloadFile(mainURL, mainPath); err != nil {
-		return "", fmt.Errorf("下载 %s 失败: %w", assetName, err)
-	}
-
-	// 2. 下载哈希文件
-	hashURL := mainURL + ".sha256"
-	hashPath := mainPath + ".sha256"
-
-	log.Printf("[UpdateService] 下载哈希文件: %s", hashURL)
-	if err := us.downloadFile(hashURL, hashPath); err != nil {
-		os.Remove(mainPath) // 清理已下载的主文件
-		return "", fmt.Errorf("下载哈希文件失败: %w", err)
-	}
-
-	// 3. 解析哈希文件（格式: "hash  filename"）
-	hashContent, err := os.ReadFile(hashPath)
-	if err != nil {
-		os.Remove(mainPath)
-		os.Remove(hashPath)
-		return "", fmt.Errorf("读取哈希文件失败: %w", err)
-	}
-
-	fields := strings.Fields(string(hashContent))
-	if len(fields) == 0 {
-		os.Remove(mainPath)
-		os.Remove(hashPath)
-		return "", fmt.Errorf("哈希文件格式错误")
-	}
-	expectedHash := fields[0]
-	os.Remove(hashPath) // 哈希文件用完即删
-
-	// 4. 校验主文件
-	if err := us.verifyDownload(mainPath, expectedHash); err != nil {
-		os.Remove(mainPath)
-		return "", err
-	}
-
-	log.Printf("[UpdateService] 文件校验通过: %s", mainPath)
-	return mainPath, nil
-}
-
-// downloadFile 下载单个文件
-func (us *UpdateService) downloadFile(url, destPath string) error {
-	client := &http.Client{
-		Timeout: 5 * time.Minute, // 大文件下载超时
-	}
-
-	resp, err := client.Get(url)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-
-	out, err := os.Create(destPath)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	_, err = io.Copy(out, resp.Body)
-	return err
-}
-
-// verifyDownload 验证下载文件的 SHA256
-func (us *UpdateService) verifyDownload(filePath, expectedHash string) error {
-	f, err := os.Open(filePath)
-	if err != nil {
-		return fmt.Errorf("打开文件失败: %w", err)
 	}
 	defer f.Close()
 
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
-		return fmt.Errorf("计算哈希失败: %w", err)
+		return "", err
 	}
 
-	actual := hex.EncodeToString(h.Sum(nil))
-
-	if !strings.EqualFold(actual, expectedHash) {
-		return fmt.Errorf("SHA256 校验失败: 期望 %s, 实际 %s", expectedHash, actual)
-	}
-
-	log.Printf("[UpdateService] SHA256 校验通过: %s", filePath)
-	return nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// downloadUpdater 从 GitHub Release 下载 updater.exe
-// P1-4 修复：移除无校验降级，强制要求 SHA256 校验
-func (us *UpdateService) downloadUpdater(targetPath string) error {
-	// 下载带 SHA256 校验的 updater.exe
-	updaterPath, err := us.downloadAndVerify("updater.exe")
+// copyFileForUpdate 复制文件（用于更新）
+func copyFileForUpdate(src, dst string) error {
+	srcFile, err := os.Open(src)
 	if err != nil {
-		// 不再降级，直接返回错误
-		return fmt.Errorf("下载 updater.exe 失败（需要 SHA256 校验）: %w", err)
+		return err
 	}
+	defer srcFile.Close()
 
-	// 如果下载路径不同，移动文件
-	if updaterPath != targetPath {
-		if err := os.Rename(updaterPath, targetPath); err != nil {
-			// 重命名失败，尝试复制
-			if err := copyUpdateFile(updaterPath, targetPath); err != nil {
-				return fmt.Errorf("移动 updater.exe 失败: %w", err)
-			}
-			os.Remove(updaterPath)
+	dstFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	_, err = io.Copy(dstFile, srcFile)
+	return err
+}
+
+// unzip 解压 zip 文件
+func unzip(src, dest string) error {
+	r, err := zip.OpenReader(src)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	os.MkdirAll(dest, 0755)
+
+	for _, f := range r.File {
+		fpath := filepath.Join(dest, f.Name)
+
+		// 防止 zip slip 攻击
+		if !strings.HasPrefix(fpath, filepath.Clean(dest)+string(os.PathSeparator)) {
+			return fmt.Errorf("illegal file path: %s", fpath)
+		}
+
+		if f.FileInfo().IsDir() {
+			os.MkdirAll(fpath, f.Mode())
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(fpath), 0755); err != nil {
+			return err
+		}
+
+		outFile, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+		if err != nil {
+			return err
+		}
+
+		rc, err := f.Open()
+		if err != nil {
+			outFile.Close()
+			return err
+		}
+
+		_, err = io.Copy(outFile, rc)
+		outFile.Close()
+		rc.Close()
+
+		if err != nil {
+			return err
 		}
 	}
 
-	return nil
-}
-
-// downloadUpdaterToTempAndVerify 每次使用前下载 updater.exe 到随机路径并校验 SHA256
-// P0-1 修复：不信任本地已存在的 updater.exe，降低本地投毒风险
-func (us *UpdateService) downloadUpdaterToTempAndVerify() (string, error) {
-	us.mu.Lock()
-	version := strings.TrimSpace(us.latestVersion)
-	us.mu.Unlock()
-	if version == "" {
-		return "", fmt.Errorf("latestVersion 未设置，无法下载 updater.exe")
-	}
-
-	releaseBaseURL := "https://github.com/Rogers-F/code-switch-R/releases/download"
-	mainURL := fmt.Sprintf("%s/%s/%s", releaseBaseURL, version, "updater.exe")
-	hashURL := mainURL + ".sha256"
-
-	// 1) 下载并解析 updater.exe.sha256（仅取第一个字段作为 hash）
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(hashURL)
-	if err != nil {
-		return "", fmt.Errorf("下载 updater.exe.sha256 失败: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("下载 updater.exe.sha256 失败，HTTP %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("读取 updater.exe.sha256 失败: %w", err)
-	}
-	fields := strings.Fields(strings.TrimSpace(string(body)))
-	if len(fields) < 1 {
-		return "", fmt.Errorf("updater.exe.sha256 文件格式错误")
-	}
-	expectedHash := fields[0]
-	if len(expectedHash) != 64 {
-		return "", fmt.Errorf("updater.exe.sha256 哈希长度异常: %s", expectedHash)
-	}
-
-	// 2) 生成随机临时路径（同目录，减少跨盘/权限问题）
-	tmp, err := os.CreateTemp(us.updateDir, "updater-*.exe")
-	if err != nil {
-		return "", fmt.Errorf("创建 updater 临时文件失败: %w", err)
-	}
-	tmpPath := tmp.Name()
-	_ = tmp.Close()
-
-	// 3) 下载 updater.exe 到临时路径
-	log.Printf("[UpdateService] 下载 updater.exe 到临时路径: %s", tmpPath)
-	if err := us.downloadFile(mainURL, tmpPath); err != nil {
-		_ = os.Remove(tmpPath)
-		return "", fmt.Errorf("下载 updater.exe 失败: %w", err)
-	}
-
-	// 4) SHA256 校验
-	if err := us.verifyDownload(tmpPath, expectedHash); err != nil {
-		_ = os.Remove(tmpPath)
-		return "", fmt.Errorf("updater.exe SHA256 校验失败: %w", err)
-	}
-
-	log.Printf("[UpdateService] updater.exe SHA256 校验通过")
-	return tmpPath, nil
-}
-
-// calculateTimeout 根据文件大小动态计算超时时间
-func calculateTimeout(fileSize int64) int {
-	base := 30 // 基础 30 秒
-	// 每 100MB 增加 10 秒
-	extra := int(fileSize / (100 * 1024 * 1024)) * 10
-	return base + extra
-}
-
-// applyInstalledUpdate 安装版更新逻辑（使用 PowerShell UAC 提权）
-// 通过 PowerShell 的 Start-Process -Verb RunAs 触发 UAC 弹窗
-func (us *UpdateService) applyInstalledUpdate(newExePath string) error {
-	currentExe, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("获取当前可执行文件路径失败: %w", err)
-	}
-	currentExe, _ = filepath.EvalSymlinks(currentExe)
-
-	// 1. 每次使用前强制重新下载 updater.exe（随机路径 + SHA256 校验）
-	// P0-1 修复：不信任本地已存在的 updater.exe，避免本地投毒
-	updaterPath, err := us.downloadUpdaterToTempAndVerify()
-	if err != nil {
-		return fmt.Errorf("下载更新器失败: %w", err)
-	}
-	// 注意：updaterPath 是临时路径（如 updater-123456.exe），使用后由 updater 自清理或下次覆盖
-
-	// 2. 计算超时时间
-	fileInfo, err := os.Stat(newExePath)
-	if err != nil {
-		return fmt.Errorf("获取新版本文件信息失败: %w", err)
-	}
-	timeout := calculateTimeout(fileInfo.Size())
-
-	// 3. 创建更新任务配置
-	taskFile := filepath.Join(us.updateDir, "update-task.json")
-	// P1-5: cleanup_paths 包含 pending 和 lock 文件，由 updater.exe 成功后清理
-	lockFile := filepath.Join(us.updateDir, "update.lock")
-	task := map[string]interface{}{
-		"main_pid":     os.Getpid(),
-		"target_exe":   currentExe,
-		"new_exe_path": newExePath,
-		"backup_path":  currentExe + ".old",
-		"cleanup_paths": []string{
-			newExePath,
-			filepath.Join(filepath.Dir(us.stateFile), ".pending-update"),
-			lockFile,
-		},
-		"timeout_sec": timeout,
-	}
-
-	taskData, err := json.MarshalIndent(task, "", "  ")
-	if err != nil {
-		return fmt.Errorf("序列化任务配置失败: %w", err)
-	}
-
-	if err := os.WriteFile(taskFile, taskData, 0o644); err != nil {
-		return fmt.Errorf("写入任务配置失败: %w", err)
-	}
-
-	log.Printf("[UpdateService] 已创建更新任务: %s", taskFile)
-	log.Printf("[UpdateService] 任务配置: PID=%d, Timeout=%ds", os.Getpid(), timeout)
-
-	// 4. 使用 PowerShell 以管理员权限启动 updater.exe
-	// Start-Process -Verb RunAs 会触发 UAC 弹窗
-	// 注意：-ArgumentList 需要用双引号包裹路径，防止空格路径被拆分
-	log.Printf("[UpdateService] 使用 UAC 提权启动更新器: %s", updaterPath)
-	cmd := exec.Command("powershell.exe",
-		"-NoProfile", "-NonInteractive",
-		"-ExecutionPolicy", "Bypass",
-		"-WindowStyle", "Hidden",
-		"-Command",
-		fmt.Sprintf(`Start-Process -FilePath '%s' -ArgumentList ('"%s"') -Verb RunAs -WindowStyle Hidden`,
-			strings.ReplaceAll(updaterPath, `'`, `''`),
-			strings.ReplaceAll(taskFile, `'`, `''`),
-		),
-	)
-
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		outStr := strings.ToLower(string(out))
-		// 兼容中英文提示，识别 UAC 取消
-		if strings.Contains(outStr, "canceled by the user") ||
-			strings.Contains(outStr, "cancelled by the user") ||
-			strings.Contains(outStr, "operation was canceled") ||
-			strings.Contains(outStr, "取消") {
-			log.Printf("[UpdateService] 用户取消 UAC，输出: %s", strings.TrimSpace(string(out)))
-			return ErrUACDenied
-		}
-		return fmt.Errorf("启动 UAC 提权更新器失败: %w, 输出: %s", err, strings.TrimSpace(string(out)))
-	}
-
-	// P1-5: 不再在此处调用 clearPendingState()，由 updater.exe 成功后通过 cleanup_paths 清理
-	// P1-2 修复：不再提前释放更新锁，由 updater.exe 在成功/失败时统一清理
-	log.Printf("[UpdateService] UAC 提权请求已确认，准备退出主程序...")
-
-	// 退出主程序
-	os.Exit(0)
 	return nil
 }

@@ -4,10 +4,26 @@
     "login": "登录"
   },
   "update": {
-    "newVersionReady": "新版本已准备就绪",
-    "installNow": "立即安装",
-    "later": "稍后",
-    "installing": "安装中..."
+    "newVersion": "新版本 {version} 可用",
+    "checking": "检查中...",
+    "downloadNow": "立即下载",
+    "downloading": "下载中",
+    "restartNow": "重启更新",
+    "later": "稍后提醒",
+    "cancel": "取消",
+    "retry": "重试",
+    "close": "关闭",
+    "error": "更新出错",
+    "noUpdate": "已是最新版本",
+    "checkFailed": "检查更新失败",
+    "downloadFailed": "下载失败",
+    "applyFailed": "应用更新失败",
+    "releaseNotes": "更新日志",
+    "currentVersion": "当前版本",
+    "latestVersion": "最新版本",
+    "checkUpdate": "检查更新",
+    "autoCheck": "自动检查更新",
+    "ignoredVersion": "已忽略此版本"
   },
   "settings": {
     "network": {
@@ -284,8 +300,6 @@
       },
       "controls": {
         "github": "打开 GitHub",
-        "githubUpdate": "打开 GitHub（发现新版本）",
-        "updateReady": "更新已准备好，点击重启",
         "theme": "切换主题",
         "settings": "打开设置",
         "mcp": "打开 MCP 面板",
@@ -330,6 +344,7 @@
           "apiUrl": "API 地址",
           "apiKey": "API 密钥",
           "apiEndpoint": "API 端点（可选）",
+          "upstreamProtocol": "上游协议",
           "officialSite": "官网地址",
           "icon": "图标",
           "enabled": "启用状态",
@@ -363,6 +378,7 @@
         "hints": {
           "level": "数字越小优先级越高，Level 1 会被优先尝试，失败后依次尝试 Level 2、Level 3 等",
           "apiEndpoint": "覆盖平台默认端点。留空使用默认（claude: /v1/messages, codex: /responses）。GLM 模型请使用 /v1/chat/completions",
+          "upstreamProtocol": "指定上游 API 的协议类型。选择 auto 时根据端点自动检测；选择 openai_chat 时自动转换请求和响应格式",
           "availabilityMonitor": "启用后会定期进行健康检查，监控此供应商的可用性状态",
           "connectivityAutoBlacklist": "健康检查失败时自动拉黑该供应商",
           "availabilityAdvancedConfig": "高级配置（测试模型、端点、超时）可在可用性页面中编辑",
@@ -390,6 +406,14 @@
         "switch": {
           "on": "已启用",
           "off": "未启用"
+        },
+        "upstreamProtocol": {
+          "auto": "自动检测",
+          "autoDesc": "根据 API 端点自动判断协议类型",
+          "anthropic": "Anthropic",
+          "anthropicDesc": "使用 Anthropic Messages API（默认）",
+          "openaiChat": "OpenAI Chat",
+          "openaiChatDesc": "使用 OpenAI Chat Completions API，自动转换格式"
         },
         "confirmDeleteTitle": "删除供应商",
         "confirmDeleteMessage": "确认删除 {name} 吗？操作不可撤销",
@@ -526,7 +550,6 @@
         "application": "应用设置",
         "trayPanel": "托盘弹窗",
         "exterior": "外观设置",
-        "update": "应用更新",
         "blacklist": "拉黑配置",
         "dataImport": "数据导入",
         "connectivity": "连通性检测"
@@ -603,14 +626,6 @@
         "authorized": "已授权",
         "go_authorized": "去授权",
         "back": "返回首页"
-      },
-      "update": {
-        "checkFailed": "连续 {count} 次检查失败",
-        "checking": "检查中...",
-        "checkNow": "立即检查",
-        "downloading": "下载中 {progress}%",
-        "downloadAndInstall": "下载并安装",
-        "installAndRestart": "安装并重启"
       },
       "import": {
         "configPath": "配置文件路径",

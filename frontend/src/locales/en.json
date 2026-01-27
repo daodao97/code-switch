@@ -4,10 +4,26 @@
     "login": "Login"
   },
   "update": {
-    "newVersionReady": "New version ready",
-    "installNow": "Install Now",
+    "newVersion": "Version {version} available",
+    "checking": "Checking...",
+    "downloadNow": "Download Now",
+    "downloading": "Downloading",
+    "restartNow": "Restart to Update",
     "later": "Later",
-    "installing": "Installing..."
+    "cancel": "Cancel",
+    "retry": "Retry",
+    "close": "Close",
+    "error": "Update error",
+    "noUpdate": "You're up to date",
+    "checkFailed": "Failed to check for updates",
+    "downloadFailed": "Download failed",
+    "applyFailed": "Failed to apply update",
+    "releaseNotes": "Release Notes",
+    "currentVersion": "Current version",
+    "latestVersion": "Latest version",
+    "checkUpdate": "Check for updates",
+    "autoCheck": "Auto-check for updates",
+    "ignoredVersion": "This version is ignored"
   },
   "settings": {
     "network": {
@@ -283,8 +299,6 @@
       },
       "controls": {
         "github": "Open project GitHub",
-        "githubUpdate": "Open GitHub (update available)",
-        "updateReady": "Update ready, click to restart",
         "theme": "Toggle theme",
         "settings": "Open settings",
         "mcp": "Open MCP panel",
@@ -329,6 +343,7 @@
           "apiUrl": "API endpoint",
           "apiKey": "API key",
           "apiEndpoint": "API Endpoint Path (optional)",
+          "upstreamProtocol": "Upstream Protocol",
           "officialSite": "Official site",
           "icon": "Icon",
           "enabled": "Enabled",
@@ -362,6 +377,7 @@
         "hints": {
           "level": "Lower numbers = higher priority. Level 1 providers are tried first, then Level 2, etc.",
           "apiEndpoint": "Override platform default endpoint. Leave blank for default (claude: /v1/messages, codex: /responses). For GLM models use /v1/chat/completions",
+          "upstreamProtocol": "Specify the upstream API protocol type. Auto mode detects based on endpoint; openai_chat mode auto-converts request/response format",
           "availabilityMonitor": "Enable background health checks for this provider. Checks are performed periodically to monitor availability.",
           "connectivityAutoBlacklist": "Automatically blacklist this provider if health checks fail repeatedly",
           "availabilityAdvancedConfig": "Advanced configuration (test model, endpoint, timeout) can be edited on the Availability page",
@@ -389,6 +405,14 @@
         "switch": {
           "on": "Active",
           "off": "Paused"
+        },
+        "upstreamProtocol": {
+          "auto": "Auto Detect",
+          "autoDesc": "Automatically detect protocol based on API endpoint",
+          "anthropic": "Anthropic",
+          "anthropicDesc": "Use Anthropic Messages API (default)",
+          "openaiChat": "OpenAI Chat",
+          "openaiChatDesc": "Use OpenAI Chat Completions API with auto format conversion"
         },
         "confirmDeleteTitle": "Remove vendor",
         "confirmDeleteMessage": "Are you sure you want to remove {name}? This action cannot be undone.",
@@ -525,7 +549,6 @@
         "trayPanel": "Tray panel",
         "exterior": "Appearance settings",
         "power": "Permission settings",
-        "update": "Application update",
         "blacklist": "Blacklist Settings",
         "dataImport": "Data Import",
         "connectivity": "Connectivity Test"
@@ -602,14 +625,6 @@
         "authorized": "Auth",
         "go_authorized": "Auth now",
         "back": "Back to home"
-      },
-      "update": {
-        "checkFailed": "Check failed {count} times in a row",
-        "checking": "Checking...",
-        "checkNow": "Check now",
-        "downloading": "Downloading {progress}%",
-        "downloadAndInstall": "Download and install",
-        "installAndRestart": "Install and restart"
       },
       "import": {
         "configPath": "Config file path",
