@@ -206,12 +206,15 @@ export function useUpdateStore() {
     if (eventCleanup) return
 
     // 监听状态变化
-    const stateOff = Events.On('update:state', (snapshot: UpdateStateSnapshot) => {
+    // WailsEvent 结构: { name: string, data: any, sender?: string }
+    const stateOff = Events.On('update:state', (ev) => {
+      const snapshot = ev.data as UpdateStateSnapshot
       Object.assign(globalState, snapshot)
     })
 
     // 监听下载进度
-    const progressOff = Events.On('update:progress', (event: ProgressEvent) => {
+    const progressOff = Events.On('update:progress', (ev) => {
+      const event = ev.data as ProgressEvent
       globalState.downloaded_bytes = event.downloaded
       globalState.total_bytes = event.total
       globalState.progress = event.percent
